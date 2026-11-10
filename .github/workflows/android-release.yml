@@ -32,13 +32,24 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: 3. Cài đặt Android SDK (API 36)
-        uses: android-actions/setup-android@v3
+      - name: 3. Cấu hình Android SDK & Chấp nhận Bản quyền (Không dùng gói tools cũ)
+        run: |
+          export ANDROID_SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+          mkdir -p "$ANDROID_SDK_ROOT/licenses"
+          printf "\n24333f8a63b6825ea9c5514f83c2829b004d1fee\nd56f5187479451eabf01fb78af6dfcb131a6481e\n8933bad161af4178b1185d1a37fbf41ea5269c55\n" > "$ANDROID_SDK_ROOT/licenses/android-sdk-license"
+          printf "\n84831b9409646a918e30573bab4c9c91346d8abd\n" > "$ANDROID_SDK_ROOT/licenses/android-sdk-preview-license"
+          SDKMANAGER=$(find "$ANDROID_SDK_ROOT/cmdline-tools" -name sdkmanager | head -n 1)
+          if [ -n "$SDKMANAGER" ]; then
+            yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+            "$SDKMANAGER" "platform-tools" "build-tools;36.0.0" "platforms;android-36" "platforms;android-36.1" || true
+          fi
 
-      - name: 4. Cài đặt cấu hình Gradle
+      - name: 4. Cài đặt Gradle 9.3.1 (Tương thích AGP 9.1.1)
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.13'
+          gradle-version: '9.3.1'
 
       - name: 5. Tạo debug.keystore và .env mặc định nếu chưa có
         run: |
@@ -75,7 +86,7 @@ jobs:
             - **Phiên bản Build:** `v1.0.${{ github.run_number }}`
             - **Mã Commit:** `${{ github.sha }}`
             - **Tính năng chính:**
-              - Bộ não Bot 3 chế độ xử lý siêu tốc (< 1ms) ngay trên thiết bị: Luật lập trình sẵn (FSM), AI Siêu Nhẹ Tự Tạo (Micro-MLP 64 tham số), và Kết hợp Tình huống (Hybrid).
+              - Bộ não Bot 3 chế độ xử lý siêu tốc (< 1ms) ngay trên thiết bị: Luật lập trình sẵn (FSM), AI Siêu Nhẹ Tự Tạo (Micro-MLP 89 tham số), và Kết hợp Tình huống (Hybrid).
               - Sân đấu giả lập Liên Quân 60 FPS trực quan với đo đạc độ trễ thực (`System.nanoTime()`).
               - Thiết kế kịch bản, ưu tiên mục tiêu, chuỗi combo chiêu thức và sơ đồ tọa độ màn hình.
             
