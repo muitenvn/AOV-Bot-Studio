@@ -15,6 +15,8 @@ import com.example.engine.BrainDecisionResult
 import com.example.engine.MicroBotBrain
 import com.example.engine.TacticalInputState
 import com.example.engine.TrainingReport
+import com.example.service.AovBotAccessibilityService
+import com.example.service.RealServiceState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -38,6 +40,8 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
     private val arenaEngine = ArenaSimulationEngine()
 
     val profiles: StateFlow<List<BotProfileEntity>>
+
+    val realServiceState: StateFlow<RealServiceState> = AovBotAccessibilityService.serviceState
 
     private val _selectedProfileId = MutableStateFlow<Int?>(null)
     val selectedProfileId: StateFlow<Int?> = _selectedProfileId.asStateFlow()
@@ -97,7 +101,8 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
             repository.seedDefaultProfilesIfNeeded()
         }
 
-        // Vòng lặp mô phỏng Sân Đấu thời gian thực (20 nhịp/giây, có thể tăng tốc x2)
+        // Đồng bộ liên tục cấu hình đang chọn sang Dịch vụ Quyền Hỗ Trợ (Chạy trên Game Thật)
+        // và cập nhật Sân tập giả lập khi mở tab Huấn luyện AI
         viewModelScope.launch {
             while (isActive) {
                 val activeProfile = getActiveProfile()
@@ -105,6 +110,10 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
                     cachedWeightsProfileId = activeProfile.id
                     cachedWeightsArray = MicroBotBrain.parseWeightsOrDefault(activeProfile)
                 }
+                AovBotAccessibilityService.activeProfileConfig = activeProfile
+                AovBotAccessibilityService.activeWeights = cachedWeightsArray
+                AovBotAccessibilityService.activeTouchCoords = _touchCoords.value
+
                 val mult = _simulationSpeedMultiplier.value
                 repeat(mult) {
                     _arenaState.value = arenaEngine.stepSimulation(
@@ -143,6 +152,21 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
         saveProfile(updated)
     }
 
+    fun toggleRealGameAutoPlay(enabled: Boolean) {
+        AovBotAccessibilityService.activeProfileConfig = getActiveProfile()
+        AovBotAccessibilityService.activeWeights = cachedWeightsArray
+        AovBotAccessibilityService.activeTouchCoords = _touchCoords.value
+        AovBotAccessibilityService.setAutoPlaying(enabled)
+    }
+
+    fun updateRealScanInterval(intervalMs: Long) {
+        AovBotAccessibilityService.setScanIntervalMs(intervalMs)
+    }
+
+    fun toggleRealFloatingOverlay(show: Boolean) {
+        AovBotAccessibilityService.toggleFloatingOverlay(show)
+    }
+
     fun saveProfile(profile: BotProfileEntity) {
         viewModelScope.launch(Dispatchers.IO) {
             val weights = if (profile.weightsCsv.isBlank()) {
@@ -159,6 +183,7 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
                 repository.update(toSave)
             }
             cachedWeightsProfileId = -1
+            AovBotAccessibilityService.activeProfileConfig = toSave
         }
     }
 
@@ -215,12 +240,6 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
         _testInputState.value = updater(_testInputState.value)
     }
 
-    fun evaluateTestSandbox(): BrainDecisionResult {
-        val active = getActiveProfile()
-        val weights = MicroBotBrain.parseWeightsOrDefault(active)
-        return MicroBotBrain.decide(_testInputState.value, active, weights)
-    }
-
     fun trainMicroAiOnDevice(epochs: Int) {
         val active = getActiveProfile()
         val role = runCatching { HeroRole.valueOf(active.heroRole) }.getOrDefault(HeroRole.MARKSMAN)
@@ -236,6 +255,7 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
             }
             _lastTrainingReport.value = report
             cachedWeightsArray = report.updatedWeights
+            AovBotAccessibilityService.activeWeights = report.updatedWeights
             val updatedProfile = active.copy(
                 weightsCsv = MicroBotBrain.weightsToCsv(report.updatedWeights),
                 trainedEpochs = active.trainedEpochs + epochs,
@@ -251,10 +271,12 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun updateTouchCoord(id: String, newX: Int, newY: Int) {
-        _touchCoords.value = _touchCoords.value.map {
+        val updated = _touchCoords.value.map {
             if (it.id == id) it.copy(xPercent = newX.coerceIn(5, 95), yPercent = newY.coerceIn(5, 95))
             else it
         }
+        _touchCoords.value = updated
+        AovBotAccessibilityService.activeTouchCoords = updated
     }
 
     fun buildExportConfigScript(profile: BotProfileEntity): String {
@@ -264,6 +286,7 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
         return """
 {
   "botProfile": "${profile.name}",
+  "executionTarget": "REAL_GAME_ACCESSIBILITY_SERVICE",
   "heroRole": "${profile.heroRole}",
   "brainEngine": "${profile.brainMode}",
   "rules": {

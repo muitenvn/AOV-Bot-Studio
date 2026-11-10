@@ -17,16 +17,18 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Gamepad
-import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -65,6 +67,7 @@ import com.example.viewmodel.TouchButtonCoord
 fun ExportAndGithubScreen(
     activeProfile: BotProfileEntity,
     touchCoords: List<TouchButtonCoord>,
+    onUpdateCoord: (String, Int, Int) -> Unit,
     exportConfigJson: String,
     modifier: Modifier = Modifier
 ) {
@@ -79,7 +82,107 @@ fun ExportAndGithubScreen(
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // 1. Thẻ Tự Động Xây Dựng APK & Đăng Lên GitHub Releases
+        // 1. Sơ Đồ Tinh Chỉnh Tọa Độ Nút Bấm Màn Hình Thật (Áp dụng trực tiếp cho AccessibilityService)
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = ElevatedTacticalCard),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Gamepad,
+                        contentDescription = "Sơ đồ nút bấm",
+                        tint = ElectricCyan
+                    )
+                    Column {
+                        Text(
+                            text = "TINH CHỈNH TỌA ĐỘ NÚT BẤM TRÊN GAME THẬT",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = ElectricCyan
+                        )
+                        Text(
+                            text = "Dịch vụ Quyền Hỗ Trợ sẽ quét độ sáng & bấm vào đúng tọa độ X% / Y% này",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MutedSteelGray
+                        )
+                    }
+                }
+
+                TouchLayoutPreviewCanvas(
+                    coords = touchCoords,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(175.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(ObsidianNavy)
+                        .border(1.dp, Color(0xFF283C63), RoundedCornerShape(12.dp))
+                )
+
+                touchCoords.forEach { item ->
+                    Surface(
+                        color = ObsidianNavy,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = item.labelVi,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = Color.White
+                                )
+                                Text(
+                                    text = "Ngang X: ${item.xPercent}% • Dọc Y: ${item.yPercent}%",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = AmberHighlight
+                                )
+                            }
+
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("X", style = MaterialTheme.typography.labelSmall, color = ElectricCyan)
+                                IconButton(
+                                    onClick = { onUpdateCoord(item.id, item.xPercent - 1, item.yPercent) },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(Icons.Default.Remove, contentDescription = "Giảm X", tint = Color.White, modifier = Modifier.size(15.dp))
+                                }
+                                IconButton(
+                                    onClick = { onUpdateCoord(item.id, item.xPercent + 1, item.yPercent) },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(Icons.Default.Add, contentDescription = "Tăng X", tint = ElectricCyan, modifier = Modifier.size(15.dp))
+                                }
+
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Y", style = MaterialTheme.typography.labelSmall, color = EmeraldSuccess)
+                                IconButton(
+                                    onClick = { onUpdateCoord(item.id, item.xPercent, item.yPercent - 1) },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(Icons.Default.Remove, contentDescription = "Giảm Y", tint = Color.White, modifier = Modifier.size(15.dp))
+                                }
+                                IconButton(
+                                    onClick = { onUpdateCoord(item.id, item.xPercent, item.yPercent + 1) },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(Icons.Default.Add, contentDescription = "Tăng Y", tint = EmeraldSuccess, modifier = Modifier.size(15.dp))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Thẻ Tự Động Xây Dựng APK & Đăng Lên GitHub Releases
         Card(
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = DeepSlateBlue),
@@ -104,7 +207,7 @@ fun ExportAndGithubScreen(
                             color = EmeraldSuccess
                         )
                         Text(
-                            text = "File cấu hình: .github/workflows/android-release.yml (Đã tích hợp sẵn)",
+                            text = "File: .github/workflows/android-release.yml (Gradle 9.3.1 + API 36.1)",
                             style = MaterialTheme.typography.labelSmall,
                             color = AmberHighlight
                         )
@@ -112,93 +215,10 @@ fun ExportAndGithubScreen(
                 }
 
                 Text(
-                    text = "Hệ thống đã tạo sẵn quy trình tự động hóa GitHub Actions trong thư mục dự án. Khi bạn đồng bộ (Push) mã nguồn lên GitHub:\n" +
-                        "1. Máy chủ GitHub sẽ tự động tải JDK 21 & Android SDK.\n" +
-                        "2. Tự động đóng gói ra file cài đặt AOV-Bot-Studio-v1.0.X.apk.\n" +
-                        "3. Tự động tạo bản phát hành mới trong mục Releases (Phát hành) ở góc phải trang GitHub của bạn để tải file APK về máy bất cứ lúc nào.",
+                    text = "Khi bạn đẩy mã nguồn lên GitHub, hệ thống sẽ tự động đóng gói file cài đặt AOV-Bot-Studio-v1.0.X.apk và đăng lên mục Releases (Phát hành) để bạn tải về điện thoại thật và cấp Quyền Hỗ Trợ chơi ngay.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = Color.White.copy(alpha = 0.92f)
                 )
-
-                Surface(
-                    color = ObsidianNavy,
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        text = "Mẹo: Trên GitHub, nếu muốn tạo lại bản APK mới thủ công, bạn chỉ cần vào tab 'Actions' -> chọn 'Build APK & Publish to GitHub Release' -> bấm nút 'Run workflow'.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = ElectricCyan,
-                        modifier = Modifier.padding(10.dp)
-                    )
-                }
-            }
-        }
-
-        // 2. Sơ Đồ Tọa Độ Nút Bấm Màn Hình Liên Quân (Tỷ lệ %)
-        Card(
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = ElevatedTacticalCard),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Gamepad,
-                        contentDescription = "Sơ đồ nút bấm",
-                        tint = ElectricCyan
-                    )
-                    Column {
-                        Text(
-                            text = "SƠ ĐỒ TỌA ĐỘ NÚT ĐIỀU KHIỂN MÀN HÌNH NGANG",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = ElectricCyan
-                        )
-                        Text(
-                            text = "Tương thích mọi độ phân giải màn hình theo tỷ lệ X% / Y%",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MutedSteelGray
-                        )
-                    }
-                }
-
-                TouchLayoutPreviewCanvas(
-                    coords = touchCoords,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(175.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(ObsidianNavy)
-                        .border(1.dp, Color(0xFF283C63), RoundedCornerShape(12.dp))
-                )
-
-                touchCoords.forEach { item ->
-                    Surface(
-                        color = ObsidianNavy,
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = item.labelVi,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = Color.White
-                            )
-                            Text(
-                                text = "X: ${item.xPercent}% • Y: ${item.yPercent}%",
-                                style = MaterialTheme.typography.labelLarge,
-                                color = AmberHighlight
-                            )
-                        }
-                    }
-                }
             }
         }
 
@@ -262,31 +282,6 @@ fun ExportAndGithubScreen(
                         )
                     }
                 }
-            }
-        }
-
-        // 4. Lưu ý An toàn Tài khoản & Chính sách Hệ thống
-        Card(
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = ElevatedTacticalCard),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Row(
-                modifier = Modifier.padding(12.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.Top
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Security,
-                    contentDescription = "An toàn tài khoản",
-                    tint = AmberHighlight,
-                    modifier = Modifier.size(20.dp)
-                )
-                Text(
-                    text = "Thiết kế An toàn Chống Khóa Acc: Ứng dụng chạy độc lập dưới dạng Phòng huấn luyện chiến thuật & Giả lập Micro-AI tốc độ cao, hoàn toàn không chèn mã độc hay dịch vụ Trợ năng (Accessibility) vào bộ nhớ game Liên Quân, giúp bảo vệ 100% tài khoản game của bạn trước hệ thống quét gian lận.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MutedSteelGray
-                )
             }
         }
     }

@@ -1,11 +1,10 @@
 <resources>
     <string name="app_name">AOV Bot Studio</string>
-    <string name="nav_arena">Sân Đấu Bot</string>
+    <string name="accessibility_service_label">AOV Bot Tự Chơi Liên Quân (Quét Màn Hình &amp; Tự Bấm)</string>
+    <string name="accessibility_service_description">Sử dụng Quyền Hỗ Trợ để quét thanh máu, bản đồ nhỏ, chiêu thức trên màn hình Liên Quân thật và tự động điều khiển Joystick, tung combo chiêu thức với độ trễ dưới 1ms.</string>
+    <string name="nav_real_game">Game Thật (Auto)</string>
     <string name="nav_builder">Lập Trình Luật</string>
-    <string name="nav_micro_ai">Micro-AI Nội Bộ</string>
+    <string name="nav_trainer">Huấn Luyện AI</string>
     <string name="nav_export">Tọa Độ &amp; GitHub</string>
     <string name="hero_banner_desc">Biểu ngữ trung tâm điều khiển chiến thuật MOBA</string>
-    <string name="bot_mode_rule">Lập trình sẵn (FSM 0ms)</string>
-    <string name="bot_mode_micro_ai">AI Siêu Nhẹ Trên Máy (MLP 64)</string>
-    <string name="bot_mode_hybrid">Kết hợp Tình huống (Hybrid)</string>
 </resources>
