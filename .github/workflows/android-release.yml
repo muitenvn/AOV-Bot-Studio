@@ -1,0 +1,88 @@
+name: Build APK & Publish to GitHub Release
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Tên phiên bản phát hành (VD: v1.0.0)'
+        required: false
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Tự động Build APK & Đăng lên Releases
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 1. Tải mã nguồn (Checkout)
+        uses: actions/checkout@v4
+
+      - name: 2. Cài đặt JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: 3. Cài đặt Android SDK (API 36)
+        uses: android-actions/setup-android@v3
+
+      - name: 4. Cài đặt cấu hình Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: 5. Tạo debug.keystore và .env mặc định nếu chưa có
+        run: |
+          if [ ! -f "debug.keystore" ]; then
+            keytool -genkey -v -keystore debug.keystore \
+              -storepass android -alias androiddebugkey \
+              -keypass android -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          if [ ! -f ".env" ]; then
+            cp .env.example .env
+          fi
+
+      - name: 6. Xây dựng file APK (Build APK)
+        run: gradle :app:assembleDebug --no-daemon
+
+      - name: 7. Đổi tên file APK dễ nhận biết
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk AOV-Bot-Studio-v1.0.${{ github.run_number }}.apk
+
+      - name: 8. Lưu APK vào Artifacts (Dự phòng tải xuống)
+        uses: actions/upload-artifact@v4
+        with:
+          name: AOV-Bot-Studio-APK
+          path: AOV-Bot-Studio-v1.0.${{ github.run_number }}.apk
+
+      - name: 9. Tự động tạo mục Phát hành (GitHub Release) và đính kèm APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.release_tag || (startsWith(github.ref, 'refs/tags/') && github.ref_name) || format('v1.0.{0}', github.run_number) }}
+          name: "AOV Bot Studio - Bản phát hành #${{ github.run_number }}"
+          body: |
+            ### Bản cài đặt tự động AOV Bot Studio (Android APK)
+            - **Phiên bản Build:** `v1.0.${{ github.run_number }}`
+            - **Mã Commit:** `${{ github.sha }}`
+            - **Tính năng chính:**
+              - Bộ não Bot 3 chế độ xử lý siêu tốc (< 1ms) ngay trên thiết bị: Luật lập trình sẵn (FSM), AI Siêu Nhẹ Tự Tạo (Micro-MLP 64 tham số), và Kết hợp Tình huống (Hybrid).
+              - Sân đấu giả lập Liên Quân 60 FPS trực quan với đo đạc độ trễ thực (`System.nanoTime()`).
+              - Thiết kế kịch bản, ưu tiên mục tiêu, chuỗi combo chiêu thức và sơ đồ tọa độ màn hình.
+            
+            **Hướng dẫn cài đặt:** Tải file `.apk` bên dưới phần **Assets** về điện thoại Android và nhấn cài đặt.
+          files: |
+            AOV-Bot-Studio-v1.0.${{ github.run_number }}.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,6 @@
+{
+  "name": "AOV Bot Studio",
+  "description": "Ứng dụng thiết kế, lập trình luật và huấn luyện AI siêu nhẹ trên thiết bị cho Bot chiến thuật Liên Quân với độ trễ dưới 1ms.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
