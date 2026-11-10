@@ -4,8 +4,9 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -19,13 +20,16 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoGraph
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Memory
-import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -46,6 +50,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.data.BotProfileEntity
+import com.example.engine.AovHeroAndMetaDatabase
+import com.example.engine.AovLane
 import com.example.engine.BrainDecisionResult
 import com.example.engine.MicroBotBrain
 import com.example.engine.TacticalInputState
@@ -62,12 +68,14 @@ import com.example.ui.theme.TacticalGold
 import java.util.Locale
 import kotlin.math.abs
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun MicroAiTrainerScreen(
     activeProfile: BotProfileEntity,
     testInput: TacticalInputState,
     lastTrainingReport: TrainingReport?,
     onUpdateTestInput: ((TacticalInputState) -> TacticalInputState) -> Unit,
+    onUpdateEnemyCompTags: (String) -> Unit,
     onTrainEpochs: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -79,6 +87,24 @@ fun MicroAiTrainerScreen(
         MicroBotBrain.decide(testInput, activeProfile, weights)
     }
 
+    val currentLane = runCatching { AovLane.valueOf(activeProfile.assignedLane) }.getOrDefault(AovLane.TOP_CAESAR)
+    val activeEnemyTags = remember(activeProfile.enemyCompTagsCsv) {
+        activeProfile.enemyCompTagsCsv.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+    }
+    val draftRec = remember(currentLane, activeEnemyTags) {
+        AovHeroAndMetaDatabase.analyzeDraftAndMeta(currentLane, activeEnemyTags)
+    }
+    val heroSpec = remember(activeProfile.selectedHeroId, activeProfile.heroRole) {
+        AovHeroAndMetaDatabase.getHeroSpecByIdOrRole(activeProfile.selectedHeroId, activeProfile.heroRole)
+    }
+
+    val compTagOptions = listOf(
+        "HEAL_TANK" to "Địch Hồi Máu Mạnh (Taara/Helen/Flo)",
+        "HARD_CC" to "Nhiều Khống Chế Cứng (Aleister/Gildur)",
+        "ASSASSIN_BURST" to "Sát Thủ Tàng Hình/Sốc Đam (Kaine/Ngộ Không)",
+        "POKE_MAGE" to "Cấu Rỉa Tầm Xa (Elsu/Yue/Iggy)"
+    )
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -86,10 +112,145 @@ fun MicroAiTrainerScreen(
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // 1. Giới thiệu Kiến trúc Micro-AI 89 Tham Số chạy trên CPU Điện Thoại
+        // 1. BỘ NÃO CẤM / CHỌN HỢP META & KHẮC CHẾ ĐỘI HÌNH ĐỊCH
         Card(
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = DeepSlateBlue),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(
+                        imageVector = Icons.Default.Block,
+                        contentDescription = "Cấm chọn hợp Meta",
+                        tint = CrimsonDanger
+                    )
+                    Column {
+                        Text(
+                            text = "AI CẤM / CHỌN HỢP META & LÊN ĐỒ KHẮC CHẾ",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = AmberHighlight
+                        )
+                        Text(
+                            text = "Phân tích đội hình địch để chọn tướng, cấm tướng và đổi nhánh đồ tự động",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MutedSteelGray
+                        )
+                    }
+                }
+
+                // Danh sách Tướng Nên Cấm
+                Surface(
+                    color = ObsidianNavy,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = "NÊN CẤM CON GÌ TRONG RANK HIỆN TẠI (TOP BAN META):",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = CrimsonDanger
+                        )
+                        draftRec.priorityBans.forEach { (banHero, reason) ->
+                            Text(
+                                text = "• $banHero: $reason",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White.copy(alpha = 0.9f)
+                            )
+                        }
+                    }
+                }
+
+                // Tướng khắc chế & bị khắc chế của tướng đang dùng
+                Surface(
+                    color = ObsidianNavy,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = "PHÂN TÍCH TƯỚNG ĐANG CHỌN: ${heroSpec.heroName}",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = ElectricCyan
+                        )
+                        Text(
+                            text = "• Khắc chế mạnh (Nên Pick khi địch có): ${heroSpec.strongAgainstHeroes.joinToString(", ")}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = EmeraldSuccess
+                        )
+                        Text(
+                            text = "• Bị khắc chế bởi (Cẩn thận hoặc Cấm đi): ${heroSpec.counteredByHeroes.joinToString(", ")}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = CrimsonDanger
+                        )
+                        Text(
+                            text = "• Trang bị chuẩn Meta: ${heroSpec.coreItems.joinToString(" → ")}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AmberHighlight
+                        )
+                    }
+                }
+
+                // Chọn đặc điểm đội hình địch để AI đổi nhánh mua đồ khắc chế
+                Text(
+                    text = "Đội hình địch trong trận có gì? (Bấm chọn để Bot tự đổi nhánh mua đồ khắc chế):",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = ElectricCyan
+                )
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    compTagOptions.forEach { (tagKey, labelVi) ->
+                        val selected = tagKey in activeEnemyTags
+                        FilterChip(
+                            selected = selected,
+                            onClick = {
+                                val nextSet = activeEnemyTags.toMutableSet()
+                                if (selected) nextSet.remove(tagKey) else nextSet.add(tagKey)
+                                onUpdateEnemyCompTags(nextSet.joinToString(","))
+                            },
+                            label = { Text(labelVi, style = MaterialTheme.typography.labelSmall) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = TacticalGold.copy(alpha = 0.22f),
+                                selectedLabelColor = AmberHighlight
+                            )
+                        )
+                    }
+                }
+
+                Surface(
+                    color = EmeraldSuccess.copy(alpha = 0.12f),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, EmeraldSuccess.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
+                ) {
+                    Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Icon(Icons.Default.Shield, contentDescription = null, tint = EmeraldSuccess, modifier = Modifier.size(16.dp))
+                            Text(
+                                text = "CHIẾN THUẬT LÊN ĐỒ & ĐỐI ĐẦU TỰ ĐỘNG:",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = EmeraldSuccess
+                            )
+                        }
+                        draftRec.counterBuildAdvice.forEach { advice ->
+                            Text(
+                                text = "• $advice",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. HUẤN LUYỆN MẠNG NƠ-RON CHIẾN THUẬT TRÊN THIẾT BỊ (ON-DEVICE TACTICAL MLP)
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = ElevatedTacticalCard),
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -101,17 +262,17 @@ fun MicroAiTrainerScreen(
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Icon(
                             imageVector = Icons.Default.Memory,
-                            contentDescription = "Mạng nơ-ron nội bộ",
+                            contentDescription = "Huấn luyện AI nội bộ",
                             tint = ElectricCyan
                         )
                         Column {
                             Text(
-                                text = "MÔ HÌNH AI SIÊU NHẸ TỰ TẠO (MICRO-MLP)",
+                                text = "HUẤN LUYỆN AI CHIẾN THUẬT TRÊN MÁY",
                                 style = MaterialTheme.typography.labelLarge,
                                 color = ElectricCyan
                             )
                             Text(
-                                text = "8 Đầu vào → 6 Nút ẩn (LeakyReLU) → 5 Hành động",
+                                text = "Dạy mạng nơ-ron khi nào đánh, khi nào biến về, khi nào né Gank",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MutedSteelGray
                             )
@@ -124,7 +285,7 @@ fun MicroAiTrainerScreen(
                         modifier = Modifier.border(1.dp, ElectricCyan.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
                     ) {
                         Text(
-                            text = "89 Tham Số",
+                            text = "${activeProfile.trainedEpochs} Vòng",
                             style = MaterialTheme.typography.labelLarge,
                             color = ElectricCyan,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
@@ -132,45 +293,17 @@ fun MicroAiTrainerScreen(
                     }
                 }
 
-                Text(
-                    text = "Thay vì gọi AI đám mây (mất 800-2000ms làm Bot bị trễ đòn), mô hình Micro-MLP này được viết thuần bằng mảng số thực ngay trên CPU điện thoại, suy luận chỉ mất ~1-3 micro-giây (0.002ms).",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Color.White.copy(alpha = 0.9f)
-                )
-
-                // Biểu đồ mạng nơ-ron trực quan
                 NeuralNetVisualizerCanvas(
                     inputs = testInput.toFloatArray8(),
                     weights = weights,
                     probabilities = sandboxDecision.actionProbabilities,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(165.dp)
+                        .height(155.dp)
                         .clip(RoundedCornerShape(12.dp))
                         .background(ObsidianNavy)
                         .border(1.dp, Color(0xFF263859), RoundedCornerShape(12.dp))
                 )
-
-                // Thông số huấn luyện hiện tại
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = "Số vòng đã học: ${activeProfile.trainedEpochs} epochs",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = AmberHighlight
-                    )
-                    Text(
-                        text = String.format(
-                            Locale.US,
-                            "Độ chính xác mẫu: %.1f%%",
-                            lastTrainingReport?.accuracyPercent ?: activeProfile.lastAccuracyPercent
-                        ),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = EmeraldSuccess
-                    )
-                }
 
                 if (lastTrainingReport != null) {
                     Surface(
@@ -181,7 +314,7 @@ fun MicroAiTrainerScreen(
                         Text(
                             text = String.format(
                                 Locale.US,
-                                "Huấn luyện xong +%d vòng trong %.2f ms (Thật) • Sai số Loss: %.4f • Độ chuẩn: %.1f%%",
+                                "Đã huấn luyện thêm +%d vòng trên CPU điện thoại trong %.2f ms • Sai số Loss: %.4f • Độ chuẩn chiến thuật: %.1f%%",
                                 lastTrainingReport.epochsRun,
                                 lastTrainingReport.trainingDurationMs,
                                 lastTrainingReport.finalLoss,
@@ -194,7 +327,6 @@ fun MicroAiTrainerScreen(
                     }
                 }
 
-                // Nút bấm Huấn luyện trực tiếp trên thiết bị
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -208,7 +340,7 @@ fun MicroAiTrainerScreen(
                     ) {
                         Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Học Nhanh +300 Vòng", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                        Text("Huấn Luyện +300 Vòng", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                     }
                     OutlinedButton(
                         onClick = { onTrainEpochs(1500) },
@@ -218,16 +350,16 @@ fun MicroAiTrainerScreen(
                     ) {
                         Icon(Icons.Default.AutoGraph, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Học Sâu +1500 Vòng", style = MaterialTheme.typography.labelSmall)
+                        Text("Huấn Luyện Sâu +1500 Vòng", style = MaterialTheme.typography.labelSmall)
                     }
                 }
             }
         }
 
-        // 2. Phòng Thí Nghiệm Tình Huống Giả Định (Thử phản xạ của Micro-AI)
+        // 3. KIỂM TRA QUYẾT ĐỊNH CỦA ĐẦU NÃO BOT TRONG CÁC TÌNH HUỐNG THỰC CHIẾN
         Card(
             shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = ElevatedTacticalCard),
+            colors = CardDefaults.cardColors(containerColor = DeepSlateBlue),
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -237,18 +369,17 @@ fun MicroAiTrainerScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "PHÒNG THỬ PHẢN XẠ TÌNH HUỐNG TỨC THÌ",
+                        text = "KIỂM TRA ĐẦU NÃO PHÁN ĐOÁN TÌNH HUỐNG",
                         style = MaterialTheme.typography.labelLarge,
                         color = AmberHighlight
                     )
                     Text(
-                        text = String.format(Locale.US, "Tốc độ: %.2f µs", sandboxDecision.executionMicros),
+                        text = "Tỷ lệ thắng giao tranh: ${sandboxDecision.combatWinConfidencePct}%",
                         style = MaterialTheme.typography.labelLarge,
-                        color = EmeraldSuccess
+                        color = if (sandboxDecision.combatWinConfidencePct >= 60) EmeraldSuccess else CrimsonDanger
                     )
                 }
 
-                // Kết quả quyết định của Sandbox
                 Surface(
                     color = ObsidianNavy,
                     shape = RoundedCornerShape(12.dp),
@@ -258,7 +389,7 @@ fun MicroAiTrainerScreen(
                 ) {
                     Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(
-                            text = "QUYẾT ĐỊNH: ${sandboxDecision.action.titleVi}",
+                            text = "PHÁN ĐOÁN: ${sandboxDecision.action.titleVi}",
                             style = MaterialTheme.typography.titleMedium,
                             color = Color(sandboxDecision.action.badgeColorHex)
                         )
@@ -268,14 +399,18 @@ fun MicroAiTrainerScreen(
                             color = Color.White
                         )
                         Text(
-                            text = "Chuỗi nút bấm xuất ra: ${sandboxDecision.recommendedComboStep}",
+                            text = "Chuỗi Múa: ${sandboxDecision.recommendedComboStep}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = ElectricCyan
+                        )
+                        Text(
+                            text = "Đồ Khắc Chế Ưu Tiên: ${sandboxDecision.recommendedCounterItem}",
                             style = MaterialTheme.typography.labelSmall,
                             color = AmberHighlight
                         )
                     }
                 }
 
-                // Bảng điểm xác suất 5 hành động của mạng nơ-ron
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     MicroBotBrain.OUTPUT_ACTIONS.forEachIndexed { idx, act ->
                         val prob = sandboxDecision.actionProbabilities.getOrElse(idx) { 0f }
@@ -288,7 +423,7 @@ fun MicroAiTrainerScreen(
                                 text = act.titleVi.substringBefore(" ("),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = Color.White,
-                                modifier = Modifier.width(145.dp)
+                                modifier = Modifier.width(150.dp)
                             )
                             LinearProgressIndicator(
                                 progress = { prob.coerceIn(0f, 1f) },
@@ -309,16 +444,8 @@ fun MicroAiTrainerScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "Kéo thanh trượt để đổi tình huống trận đấu:",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = ElectricCyan
-                )
-
-                // Sliders điều chỉnh đầu vào
                 SandboxSlider(
-                    label = "Máu của Bot hiện tại",
+                    label = "Máu của bạn hiện tại",
                     valueText = "${(testInput.botHpRatio * 100).toInt()}%",
                     value = testInput.botHpRatio,
                     color = EmeraldSuccess,
@@ -332,7 +459,16 @@ fun MicroAiTrainerScreen(
                     onValueChange = { v -> onUpdateTestInput { it.copy(enemyHpRatio = v) } }
                 )
                 SandboxSlider(
-                    label = "Khoảng cách tới Tướng Địch",
+                    label = "Số tướng địch mất tích trên Minimap (MIA)",
+                    valueText = "${testInput.missingEnemiesMia} Tướng",
+                    value = (testInput.missingEnemiesMia / 5f).coerceIn(0.05f, 1f),
+                    color = AmberHighlight,
+                    onValueChange = { v ->
+                        onUpdateTestInput { it.copy(missingEnemiesMia = (v * 5f).toInt().coerceIn(0, 5)) }
+                    }
+                )
+                SandboxSlider(
+                    label = "Khoảng cách tới Địch trên màn hình",
                     valueText = "${(testInput.distToEnemyNorm * 600).toInt()}px",
                     value = testInput.distToEnemyNorm,
                     color = ElectricCyan,
@@ -344,7 +480,7 @@ fun MicroAiTrainerScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Địch đang đứng dưới Trụ bảo vệ:", style = MaterialTheme.typography.bodyMedium)
+                    Text("Địch đang đứng ôm dưới Trụ:", style = MaterialTheme.typography.bodyMedium)
                     Switch(
                         checked = testInput.enemyUnderTower > 0.5f,
                         onCheckedChange = { checked ->
@@ -358,7 +494,7 @@ fun MicroAiTrainerScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Có đạn chiêu định hướng đang bay tới:", style = MaterialTheme.typography.bodyMedium)
+                    Text("Phát hiện đạn chiêu định hướng đang bay tới:", style = MaterialTheme.typography.bodyMedium)
                     Switch(
                         checked = testInput.incomingProjectileThreat > 0.5f,
                         onCheckedChange = { checked ->
@@ -420,7 +556,6 @@ private fun NeuralNetVisualizerCanvas(
             Offset(col3X, h * (0.16f + 0.68f * (k.toFloat() / (MicroBotBrain.OUTPUT_SIZE - 1))))
         }
 
-        // Vẽ đường nối Tầng 1
         var wIdx = 0
         for (j in hiddenPositions.indices) {
             for (i in inputPositions.indices) {
@@ -436,7 +571,6 @@ private fun NeuralNetVisualizerCanvas(
             }
         }
 
-        // Vẽ đường nối Tầng 2
         val w2Start = MicroBotBrain.INPUT_SIZE * MicroBotBrain.HIDDEN_SIZE + MicroBotBrain.HIDDEN_SIZE
         for (k in outputPositions.indices) {
             for (j in hiddenPositions.indices) {
@@ -452,7 +586,6 @@ private fun NeuralNetVisualizerCanvas(
             }
         }
 
-        // Vẽ nút Đầu vào (8 nút)
         for (i in inputPositions.indices) {
             val v = inputs.getOrElse(i) { 0.5f }
             drawCircle(
@@ -462,7 +595,6 @@ private fun NeuralNetVisualizerCanvas(
             )
         }
 
-        // Vẽ nút Ẩn ReLU (6 nút)
         for (j in hiddenPositions.indices) {
             drawCircle(
                 color = AmberHighlight,
@@ -471,7 +603,6 @@ private fun NeuralNetVisualizerCanvas(
             )
         }
 
-        // Vẽ nút Đầu ra (5 hành động)
         for (k in outputPositions.indices) {
             val p = probabilities.getOrElse(k) { 0.2f }
             drawCircle(

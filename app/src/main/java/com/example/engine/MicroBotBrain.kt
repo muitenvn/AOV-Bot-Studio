@@ -6,17 +6,18 @@ import com.example.data.HeroRole
 import com.example.data.TargetPriority
 import kotlin.math.exp
 import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.sqrt
 import kotlin.random.Random
 
 enum class BotTacticalAction(val code: Int, val titleVi: String, val badgeColorHex: Long) {
-    ATTACK_COMBO(0, "Dồn Combo Tấn Công Địch", 0xFFFF5252),
-    KITE_POKE(1, "Thả Diều & Cấu Rỉa Giữ Vị Trí", 0xFF00E5FF),
-    PUSH_LANE(2, "Dọn Lính & Đẩy Trụ Đường Giữa", 0xFFFFB300),
-    FARM_JUNGLE(3, "Ăn Quái Rừng / Bùa Tăng Tốc", 0xFF00E676),
-    RETREAT_HEAL(4, "Rút Lui Về Trụ & Hồi Phục", 0xFFB388FF),
-    DODGE_SKILLSHOT(5, "Lách Né Chiêu Định Hướng (Vector 90°)", 0xFFFFEA00)
+    ATTACK_COMBO(0, "Múa Combo Đặc Trưng Của Tướng", 0xFFFF5252),
+    KITE_POKE(1, "Thả Diều Giữ Cự Ly & Cấu Rỉa", 0xFF00E5FF),
+    PUSH_LANE(2, "Đi Đường Dọn Lính & Bấm Đẩy Trụ", 0xFFFFB300),
+    FARM_JUNGLE(3, "Ăn Bùa Rừng / Tranh Chấp Rồng & Caesar", 0xFF00E676),
+    RETREAT_HEAL(4, "Bị Gank Nguy Hiểm -> Tốc Biến / Cấp Cứu Lùi Trụ", 0xFFB388FF),
+    DODGE_SKILLSHOT(5, "Lách 90° Né Chiêu Định Hướng", 0xFFFFEA00),
+    SAFE_RECALL_BASE(6, "Lùi Vào Bụi/Trụ & Bấm Biến Về Hồi Máu/Mana", 0xFF40C4FF),
+    ROAM_ROTATE(7, "Đọc Minimap Đảo Đường Hội Quân Hơn Người", 0xFF69F0AE)
 }
 
 data class TacticalInputState(
@@ -29,14 +30,18 @@ data class TacticalInputState(
     val skillsReadyRatio: Float,    // 0.0 .. 1.0 (tỷ lệ chiêu 1/2/3 sẵn sàng)
     val incomingProjectileThreat: Float, // 1.0 nếu có đạn chiêu định hướng bay tới
     val enemyMinionCount: Int = 2,
-    val jungleMonsterAlive: Boolean = true
+    val jungleMonsterAlive: Boolean = true,
+    val missingEnemiesMia: Int = 1, // Số địch mất tích trên Minimap (0..5)
+    val alliesNearbyCount: Int = 1, // Số đồng đội gần mình trên Minimap
+    val enemiesNearbyCount: Int = 1,// Số địch gần mình trên Minimap
+    val groundFlowerDetected: Boolean = false // Phát hiện Hoa Florentino / ấn nội tại dưới đất
 ) {
     fun toFloatArray8(): FloatArray = floatArrayOf(
         botHpRatio.coerceIn(0f, 1f),
         botManaRatio.coerceIn(0f, 1f),
         enemyHpRatio.coerceIn(0f, 1f),
         distToEnemyNorm.coerceIn(0f, 1f),
-        distToAllyTowerNorm.coerceIn(0f, 1f),
+        (missingEnemiesMia / 5f).coerceIn(0f, 1f),
         enemyUnderTower.coerceIn(0f, 1f),
         skillsReadyRatio.coerceIn(0f, 1f),
         incomingProjectileThreat.coerceIn(0f, 1f)
@@ -47,9 +52,11 @@ data class BrainDecisionResult(
     val action: BotTacticalAction,
     val reasonVi: String,
     val engineUsed: String,
-    val executionMicros: Float, // Thời gian thực đo bằng System.nanoTime() / 1000f
-    val actionProbabilities: FloatArray, // 5 xác suất cho 5 hành động chính
-    val recommendedComboStep: String
+    val executionMicros: Float,
+    val actionProbabilities: FloatArray,
+    val recommendedComboStep: String,
+    val recommendedCounterItem: String = "Giày Kiên Cường + Thương Xuyên Phá",
+    val combatWinConfidencePct: Int = 72
 )
 
 data class TrainingReport(
@@ -61,27 +68,29 @@ data class TrainingReport(
 )
 
 /**
- * Bộ não xử lý siêu tốc chạy 100% trên thiết bị (On-Device):
- * - Chế độ 1: Luật lập trình sẵn (FSM / Cây quyết định) -> 0 tham số AI, tốc độ ~0.003ms
- * - Chế độ 2: Mạng nơ-ron siêu nhẹ tự tạo (Micro-MLP: 8 đầu vào -> 6 nút ẩn ReLU -> 5 đầu ra) = 89 trọng số Float
- * - Chế độ 3: Hybrid (Dùng luật cứng cho phản xạ sinh tồn + Micro-MLP cho giao tranh)
+ * Bộ não Chiến thuật Liên Quân Chuyên Sâu chạy 100% trên thiết bị (< 0.05ms):
+ * Tích hợp đầy đủ:
+ * 1. Đọc Minimap (Phát hiện địch mất tích MIA báo hiệu bị Gank, đếm quân số đồng minh vs địch)
+ * 2. Khi nào nên Biến Về (Máu < ngưỡng rút lui hoặc Mana < ngưỡng cạn kiệt và đã lùi khỏi tầm địch)
+ * 3. Khi nào nên Đánh / Nhịn (Tính xác suất thắng giao tranh dựa trên quân số, máu, chiêu cuối và trụ)
+ * 4. Cách Múa Tướng riêng biệt (Florentino nhặt hoa 120°, Nakroth lướt ngược S2, Tulen tích 5 ấn, Hayate phi tiêu...)
+ * 5. Tự động chọn Trang bị Khắc chế theo đội hình địch
  */
 object MicroBotBrain {
     const val INPUT_SIZE = 8
     const val HIDDEN_SIZE = 6
     const val OUTPUT_SIZE = 5
-    // Tổng số trọng số: (8 * 6) + 6 (bias ẩn) + (6 * 5) + 5 (bias ra) = 48 + 6 + 30 + 5 = 89 floats
     const val TOTAL_WEIGHTS = (INPUT_SIZE * HIDDEN_SIZE) + HIDDEN_SIZE + (HIDDEN_SIZE * OUTPUT_SIZE) + OUTPUT_SIZE
 
     val INPUT_LABELS_VI = listOf(
-        "Máu Bot (%)",
-        "Năng lượng (%)",
-        "Máu Địch (%)",
-        "Khoảng cách tới Địch",
-        "Khoảng cách tới Trụ nhà",
-        "Địch đang ôm Trụ",
-        "Chiêu thức Sẵn sàng",
-        "Đạn định hướng bay tới"
+        "Máu Bản Thân (%)",
+        "Năng Lượng / Nội Năng (%)",
+        "Máu Mục Tiêu Địch (%)",
+        "Khoảng Cách Tới Địch",
+        "Địch Mất Tích Trên Minimap (MIA)",
+        "Địch Đang Ôm Trụ Bảo Vệ",
+        "Tỷ Lệ Chiêu 1/2/Ulti Sẵn Sàng",
+        "Đạn Định Hướng Đang Bay Tới"
     )
 
     val OUTPUT_ACTIONS = listOf(
@@ -99,213 +108,196 @@ object MicroBotBrain {
     ): BrainDecisionResult {
         val startNs = System.nanoTime()
         val mode = runCatching { BrainMode.valueOf(profile.brainMode) }.getOrDefault(BrainMode.HYBRID)
-        val comboSteps = profile.comboSequence.split("->").map { it.trim() }.filter { it.isNotEmpty() }
-        val primaryCombo = comboSteps.firstOrNull() ?: "S1"
+        val heroSpec = AovHeroAndMetaDatabase.getHeroSpecByIdOrRole(profile.selectedHeroId, profile.heroRole)
+        val counterItem = pickSmartCounterItem(profile, heroSpec)
+        val winConf = calculateCombatWinConfidence(state)
 
-        return when (mode) {
-            BrainMode.RULE_FSM -> {
-                val (action, reason, probs) = evaluateRuleFsm(state, profile)
-                val elapsedMicros = (System.nanoTime() - startNs) / 1000f
-                BrainDecisionResult(
-                    action = action,
-                    reasonVi = reason,
-                    engineUsed = "FSM Lập trình sẵn",
-                    executionMicros = max(0.8f, elapsedMicros),
-                    actionProbabilities = probs,
-                    recommendedComboStep = pickComboStep(state, comboSteps)
-                )
-            }
-
-            BrainMode.MICRO_AI -> {
-                val weights = cachedWeights ?: parseWeightsOrDefault(profile)
-                val probs = forwardMicroMlp(state.toFloatArray8(), weights)
-                var bestIdx = 0
-                for (i in 1 until OUTPUT_SIZE) {
-                    if (probs[i] > probs[bestIdx]) bestIdx = i
-                }
-                val chosenAction = if (state.incomingProjectileThreat > 0.65f && profile.autoDodgeSkillshot) {
-                    BotTacticalAction.DODGE_SKILLSHOT
-                } else {
-                    OUTPUT_ACTIONS[bestIdx]
-                }
-                val confPct = (probs[bestIdx] * 100f).toInt()
-                val elapsedMicros = (System.nanoTime() - startNs) / 1000f
-                BrainDecisionResult(
-                    action = chosenAction,
-                    reasonVi = if (chosenAction == BotTacticalAction.DODGE_SKILLSHOT) {
-                        "Phát hiện chiêu định hướng! Lách vector 90° trước khi chạy MLP ($confPct%)"
-                    } else {
-                        "Micro-MLP (89 tham số) chấm điểm cao nhất: ${chosenAction.titleVi} ($confPct%)"
-                    },
-                    engineUsed = "Micro-MLP Nội Bộ",
-                    executionMicros = max(1.2f, elapsedMicros),
-                    actionProbabilities = probs,
-                    recommendedComboStep = pickComboStep(state, comboSteps)
-                )
-            }
-
-            BrainMode.HYBRID -> {
-                val retreatThreshold = profile.retreatHpPercent / 100f
-                val diveThreshold = profile.diveTowerEnemyHpPercent / 100f
-
-                // Tầng 1: Phản xạ cứng tức thì (0ms) cho tình huống sinh tử
-                if (state.incomingProjectileThreat > 0.6f && profile.autoDodgeSkillshot) {
-                    val elapsedMicros = (System.nanoTime() - startNs) / 1000f
-                    return BrainDecisionResult(
-                        action = BotTacticalAction.DODGE_SKILLSHOT,
-                        reasonVi = "[Luật Cứng] Đạn địch áp sát -> Lách vuông góc 90° tức thì",
-                        engineUsed = "Hybrid (Phản xạ Luật)",
-                        executionMicros = max(0.9f, elapsedMicros),
-                        actionProbabilities = floatArrayOf(0.05f, 0.75f, 0.05f, 0.05f, 0.10f),
-                        recommendedComboStep = "Lách 90° + Tốc Biến"
-                    )
-                }
-
-                if (state.botHpRatio <= retreatThreshold) {
-                    val elapsedMicros = (System.nanoTime() - startNs) / 1000f
-                    return BrainDecisionResult(
-                        action = BotTacticalAction.RETREAT_HEAL,
-                        reasonVi = "[Luật Cứng] Máu ${(state.botHpRatio * 100).toInt()}% <= ngưỡng rút lui ${profile.retreatHpPercent}%",
-                        engineUsed = "Hybrid (Bảo toàn mạng)",
-                        executionMicros = max(0.9f, elapsedMicros),
-                        actionProbabilities = floatArrayOf(0.02f, 0.08f, 0.03f, 0.02f, 0.85f),
-                        recommendedComboStep = "Hồi Máu + Lùi Trụ"
-                    )
-                }
-
-                if (state.enemyUnderTower > 0.5f && state.enemyHpRatio > diveThreshold && state.distToEnemyNorm < 0.45f) {
-                    val elapsedMicros = (System.nanoTime() - startNs) / 1000f
-                    return BrainDecisionResult(
-                        action = BotTacticalAction.PUSH_LANE,
-                        reasonVi = "[Luật Cứng] Địch ôm trụ còn ${(state.enemyHpRatio * 100).toInt()}% máu (> ${profile.diveTowerEnemyHpPercent}%) -> Không băng trụ ẩu",
-                        engineUsed = "Hybrid (Chống băng trụ)",
-                        executionMicros = max(1.0f, elapsedMicros),
-                        actionProbabilities = floatArrayOf(0.05f, 0.25f, 0.55f, 0.10f, 0.05f),
-                        recommendedComboStep = primaryCombo
-                    )
-                }
-
-                // Tầng 2: Tình huống giao tranh mở -> Dùng Micro-MLP kết hợp trọng số ưu tiên của người dùng
-                val weights = cachedWeights ?: parseWeightsOrDefault(profile)
-                val probs = forwardMicroMlp(state.toFloatArray8(), weights)
-
-                // Điều chỉnh nhẹ theo TargetPriority người dùng chọn
-                val priority = runCatching { TargetPriority.valueOf(profile.targetPriority) }
-                    .getOrDefault(TargetPriority.LOWEST_HP_HERO)
-                when (priority) {
-                    TargetPriority.LOWEST_HP_HERO -> if (state.enemyHpRatio < 0.45f) probs[0] += 0.22f
-                    TargetPriority.NEAREST_ENEMY -> probs[1] += 0.18f
-                    TargetPriority.TOWER_AND_WAVE -> if (state.enemyMinionCount > 0) probs[2] += 0.24f
-                    TargetPriority.JUNGLE_FARM -> if (state.jungleMonsterAlive) probs[3] += 0.25f
-                }
-                normalizeProbabilities(probs)
-
-                var bestIdx = 0
-                for (i in 1 until OUTPUT_SIZE) {
-                    if (probs[i] > probs[bestIdx]) bestIdx = i
-                }
-                val chosenAction = OUTPUT_ACTIONS[bestIdx]
-                val confPct = (probs[bestIdx] * 100f).toInt()
-                val elapsedMicros = (System.nanoTime() - startNs) / 1000f
-                BrainDecisionResult(
-                    action = chosenAction,
-                    reasonVi = "[Hybrid AI+Luật] Chọn ${chosenAction.titleVi} (Độ tin cậy $confPct%)",
-                    engineUsed = "Hybrid (FSM + Micro-MLP)",
-                    executionMicros = max(1.4f, elapsedMicros),
-                    actionProbabilities = probs,
-                    recommendedComboStep = pickComboStep(state, comboSteps)
-                )
-            }
-        }
-    }
-
-    private fun pickComboStep(state: TacticalInputState, comboSteps: List<String>): String {
-        if (comboSteps.isEmpty()) return "AA"
-        return when {
-            state.skillsReadyRatio > 0.8f -> comboSteps.joinToString(" → ")
-            state.skillsReadyRatio > 0.45f -> comboSteps.take(2).joinToString(" → ")
-            else -> "Đánh thường (AA) + Giữ vị trí"
-        }
-    }
-
-    private fun evaluateRuleFsm(
-        state: TacticalInputState,
-        profile: BotProfileEntity
-    ): Triple<BotTacticalAction, String, FloatArray> {
         val retreatRatio = profile.retreatHpPercent / 100f
+        val recallManaRatio = profile.recallManaPercent / 100f
         val diveRatio = profile.diveTowerEnemyHpPercent / 100f
-        val role = runCatching { HeroRole.valueOf(profile.heroRole) }.getOrDefault(HeroRole.MARKSMAN)
 
-        // Luật 1: Né chiêu định hướng
-        if (state.incomingProjectileThreat > 0.6f && profile.autoDodgeSkillshot) {
-            return Triple(
-                BotTacticalAction.DODGE_SKILLSHOT,
-                "Luật #1: Phát hiện đường đạn địch -> Tách góc 90° né chiêu",
-                floatArrayOf(0.05f, 0.80f, 0.05f, 0.05f, 0.05f)
-            )
-        }
-
-        // Luật 2: Máu thấp rút lui về trụ
-        if (state.botHpRatio <= retreatRatio) {
-            return Triple(
-                BotTacticalAction.RETREAT_HEAL,
-                "Luật #2: Máu Bot ${(state.botHpRatio * 100).toInt()}% chạm ngưỡng rút lui (${profile.retreatHpPercent}%)",
-                floatArrayOf(0.02f, 0.05f, 0.03f, 0.02f, 0.88f)
-            )
-        }
-
-        // Luật 3: Kết liễu địch thấp máu (nếu không ôm trụ hoặc máu địch dưới ngưỡng băng trụ)
-        val canDive = state.enemyUnderTower < 0.5f || state.enemyHpRatio <= diveRatio
-        if (state.enemyHpRatio < 0.38f && canDive && state.skillsReadyRatio >= 0.33f) {
-            return Triple(
-                BotTacticalAction.ATTACK_COMBO,
-                "Luật #3: Địch yếu máu (${(state.enemyHpRatio * 100).toInt()}%) -> Dồn chuỗi ${profile.comboSequence}",
-                floatArrayOf(0.82f, 0.10f, 0.04f, 0.02f, 0.02f)
-            )
-        }
-
-        // Luật 4: Theo chất tướng (Xạ thủ/Pháp sư thả diều; Sát thủ/Đấu sĩ áp sát khi đủ chiêu)
-        if (state.distToEnemyNorm < 0.55f && state.enemyUnderTower < 0.5f) {
-            return if (role == HeroRole.MARKSMAN || role == HeroRole.MAGE) {
-                Triple(
-                    BotTacticalAction.KITE_POKE,
-                    "Luật #4: Giữ tầm thả diều ${profile.kitingDistance}px (${role.displayName}) vừa lùi vừa bắn",
-                    floatArrayOf(0.20f, 0.68f, 0.07f, 0.03f, 0.02f)
+        // --- TẦNG CHIẾN THUẬT BẮT BUỘC (ÁP DỤNG CHO CẢ HYBRID & RULE_FSM) ---
+        if (mode != BrainMode.MICRO_AI) {
+            // 1. Né chiêu định hướng khẩn cấp (Vector 90 độ)
+            if (state.incomingProjectileThreat > 0.6f && profile.autoDodgeSkillshot) {
+                val us = max(0.8f, (System.nanoTime() - startNs) / 1000f)
+                return BrainDecisionResult(
+                    action = BotTacticalAction.DODGE_SKILLSHOT,
+                    reasonVi = "Phát hiện vòng đỏ / đạn định hướng bay tới -> Kéo Joystick vuông góc 90° né đòn",
+                    engineUsed = "Phản xạ Né Chiêu",
+                    executionMicros = us,
+                    actionProbabilities = floatArrayOf(0.05f, 0.80f, 0.05f, 0.05f, 0.05f),
+                    recommendedComboStep = "Kéo Joystick 90° + Chiêu lướt",
+                    recommendedCounterItem = counterItem,
+                    combatWinConfidencePct = winConf
                 )
-            } else {
-                Triple(
-                    BotTacticalAction.ATTACK_COMBO,
-                    "Luật #4: Áp sát mục tiêu (${role.displayName}) kích hoạt combo",
-                    floatArrayOf(0.72f, 0.16f, 0.07f, 0.03f, 0.02f)
+            }
+
+            // 2. Logic Biến Về Thông Minh (Khi máu thấp hoặc cạn Mana và đã giãn khoảng cách với địch)
+            val needRecallHp = state.botHpRatio <= retreatRatio
+            val needRecallMana = state.botManaRatio <= recallManaRatio && heroSpec.role == HeroRole.MAGE
+            if (needRecallHp || needRecallMana) {
+                val isEnemyTooClose = state.distToEnemyNorm < 0.36f
+                val elapsedUs = max(0.9f, (System.nanoTime() - startNs) / 1000f)
+                return if (isEnemyTooClose) {
+                    // Địch đang đứng sát -> Phải Tốc Biến / Cấp Cứu chạy về trụ trước khi bấm Biến Về!
+                    BrainDecisionResult(
+                        action = BotTacticalAction.RETREAT_HEAL,
+                        reasonVi = "Máu ${(state.botHpRatio * 100).toInt()}% (<= ${profile.retreatHpPercent}%) & Địch áp sát -> Bấm Cấp Cứu/Tốc Biến lùi về trụ!",
+                        engineUsed = "Chiến thuật Thoát Giao Tranh",
+                        executionMicros = elapsedUs,
+                        actionProbabilities = floatArrayOf(0.02f, 0.06f, 0.02f, 0.02f, 0.88f),
+                        recommendedComboStep = "Phép Bổ Trợ + Kéo Lùi 225°",
+                        recommendedCounterItem = counterItem,
+                        combatWinConfidencePct = winConf
+                    )
+                } else {
+                    // Đã ở khoảng cách an toàn (trong trụ hoặc bụi cỏ) -> Bấm Nút Biến Về!
+                    BrainDecisionResult(
+                        action = BotTacticalAction.SAFE_RECALL_BASE,
+                        reasonVi = "Máu ${(state.botHpRatio * 100).toInt()}% / Mana ${(state.botManaRatio * 100).toInt()}% thấp & đã vào vùng an toàn -> Bấm Biến Về hồi đầy máu!",
+                        engineUsed = "Chiến thuật Biến Về Chuẩn",
+                        executionMicros = elapsedUs,
+                        actionProbabilities = floatArrayOf(0.02f, 0.05f, 0.03f, 0.05f, 0.85f),
+                        recommendedComboStep = "Đứng Bụi/Trụ -> Bấm Biến Về (6s)",
+                        recommendedCounterItem = counterItem,
+                        combatWinConfidencePct = winConf
+                    )
+                }
+            }
+
+            // 3. Đọc Bản Đồ Nhỏ (Minimap MIA Anti-Gank & Quân số):
+            // Nếu địch mất tích trên Minimap >= ngưỡng cảnh báo và mình đang đẩy cao một mình -> Lùi về giữ vị trí!
+            if (state.missingEnemiesMia >= profile.minimapMiaAlertCount &&
+                state.alliesNearbyCount < state.enemiesNearbyCount &&
+                state.distToAllyTowerNorm > 0.55f
+            ) {
+                val elapsedUs = max(1.0f, (System.nanoTime() - startNs) / 1000f)
+                return BrainDecisionResult(
+                    action = BotTacticalAction.KITE_POKE,
+                    reasonVi = "[Minimap Cảnh Báo] Có ${state.missingEnemiesMia} địch mất tích (MIA) & thua người (${state.alliesNearbyCount}v${state.enemiesNearbyCount}) -> Lùi giữ vị trí chống Gank!",
+                    engineUsed = "AI Đọc Bản Đồ Nhỏ (Minimap)",
+                    executionMicros = elapsedUs,
+                    actionProbabilities = floatArrayOf(0.08f, 0.65f, 0.10f, 0.07f, 0.10f),
+                    recommendedComboStep = "Kéo Lùi Ôm Mép Sông + Cấu Rỉa",
+                    recommendedCounterItem = counterItem,
+                    combatWinConfidencePct = winConf
+                )
+            }
+
+            // 4. Chống Băng Trụ Ẩu khi địch còn nhiều máu dưới trụ
+            if (state.enemyUnderTower > 0.5f && state.enemyHpRatio > diveRatio && state.distToEnemyNorm < 0.45f) {
+                val elapsedUs = max(1.0f, (System.nanoTime() - startNs) / 1000f)
+                return BrainDecisionResult(
+                    action = BotTacticalAction.PUSH_LANE,
+                    reasonVi = "Địch ôm trụ còn ${(state.enemyHpRatio * 100).toInt()}% máu (> ngưỡng băng trụ ${profile.diveTowerEnemyHpPercent}%) -> Dọn lính cấu máu trụ, không lao vào trụ",
+                    engineUsed = "Luật Chống Băng Trụ",
+                    executionMicros = elapsedUs,
+                    actionProbabilities = floatArrayOf(0.05f, 0.25f, 0.58f, 0.07f, 0.05f),
+                    recommendedComboStep = "Bấm Nút Đánh Lính / Đẩy Trụ",
+                    recommendedCounterItem = counterItem,
+                    combatWinConfidencePct = winConf
                 )
             }
         }
 
-        // Luật 5: Dọn lính hoặc ăn rừng khi đường trống
-        if (state.enemyMinionCount == 0 && profile.autoJungleWhenLaneClear && state.jungleMonsterAlive) {
-            return Triple(
-                BotTacticalAction.FARM_JUNGLE,
-                "Luật #5: Đợt lính đã dọn sạch -> Xoay sang ăn Bùa/Quái rừng tối ưu vàng",
-                floatArrayOf(0.05f, 0.10f, 0.12f, 0.70f, 0.03f)
-            )
+        // --- TẦNG MÚA TƯỚNG & GIAO TRANH (DÙNG MICRO-MLP HOẶC LUẬT CHUYÊN SÂU) ---
+        val weights = cachedWeights ?: parseWeightsOrDefault(profile)
+        val probs = forwardMicroMlp(state.toFloatArray8(), weights)
+
+        // Cộng điểm ưu tiên nếu phát hiện Hoa Florentino dưới đất hoặc lợi thế thắng giao tranh cao
+        if (state.groundFlowerDetected && heroSpec.id == "FLORENTINO") {
+            probs[0] += 0.35f
+        }
+        if (winConf >= 68 && state.distToEnemyNorm < 0.55f) {
+            probs[0] += 0.22f
+        } else if (winConf < 45 && state.distToEnemyNorm < 0.50f) {
+            probs[1] += 0.25f
+        }
+        normalizeProbabilities(probs)
+
+        var bestIdx = 0
+        for (i in 1 until OUTPUT_SIZE) {
+            if (probs[i] > probs[bestIdx]) bestIdx = i
         }
 
-        return Triple(
-            BotTacticalAction.PUSH_LANE,
-            "Luật #6: Dọn lính đường giữa và cấu máu trụ địch an toàn",
-            floatArrayOf(0.10f, 0.18f, 0.58f, 0.10f, 0.04f)
+        var chosenAction = OUTPUT_ACTIONS[bestIdx]
+        // Nếu đường đã sạch lính và đồng đội đang giao tranh gần đó trên Minimap -> Đảo đường hội quân!
+        if (chosenAction == BotTacticalAction.PUSH_LANE && state.enemyMinionCount == 0 && state.alliesNearbyCount >= 2) {
+            chosenAction = BotTacticalAction.ROAM_ROTATE
+        }
+
+        val comboPreview = heroSpec.signatureComboSteps.take(4).joinToString(" → ") { it.stepTitle }
+        val elapsedMicros = max(1.2f, (System.nanoTime() - startNs) / 1000f)
+
+        val reasonText = when (chosenAction) {
+            BotTacticalAction.ATTACK_COMBO ->
+                "Lợi thế giao tranh $winConf% -> Kích hoạt Múa ${heroSpec.heroName.substringBefore(" ")}: ${heroSpec.mechanicsSummaryVi.substringBefore(".")}"
+            BotTacticalAction.KITE_POKE ->
+                "Giữ khoảng cách thả diều ${profile.kitingDistance}px (${heroSpec.heroName.substringBefore(" ")}) vừa lùi vừa cấu rỉa"
+            BotTacticalAction.ROAM_ROTATE ->
+                "Đã dọn xong lính đường ${profile.assignedLane} -> Nhìn Minimap đảo đường hội quân đánh hơn người"
+            BotTacticalAction.FARM_JUNGLE ->
+                "Đường an toàn -> Xoay vào ăn Bùa / Quái rừng & kiểm soát mục tiêu lớn"
+            else ->
+                "Đi đường ${profile.assignedLane} dọn lính lên cấp & ép máu trụ địch"
+        }
+
+        return BrainDecisionResult(
+            action = chosenAction,
+            reasonVi = reasonText,
+            engineUsed = "${mode.titleVi.substringBefore(" (")} • ${heroSpec.id}",
+            executionMicros = elapsedMicros,
+            actionProbabilities = probs,
+            recommendedComboStep = comboPreview,
+            recommendedCounterItem = counterItem,
+            combatWinConfidencePct = winConf
         )
     }
 
     /**
-     * Suy luận mạng nơ-ron 2 tầng (8 -> 6 ReLU -> 5 Softmax) bằng mảng tĩnh tốc độ cao
+     * Tính toán tỷ lệ % thắng giao tranh (Should Fight Evaluator) từ 0..99%
      */
+    fun calculateCombatWinConfidence(state: TacticalInputState): Int {
+        var score = 50f
+        // Chênh lệch máu
+        score += (state.botHpRatio - state.enemyHpRatio) * 38f
+        // Sẵn sàng bộ chiêu thức
+        score += (state.skillsReadyRatio - 0.4f) * 25f
+        // Chênh lệch quân số trên Minimap
+        score += (state.alliesNearbyCount - state.enemiesNearbyCount) * 16f
+        // Trừ điểm nếu địch đứng trong trụ của chúng
+        if (state.enemyUnderTower > 0.5f && state.enemyHpRatio > 0.22f) {
+            score -= 26f
+        }
+        // Trừ điểm nếu nhiều địch mất tích (MIA)
+        if (state.missingEnemiesMia >= 3) {
+            score -= 14f
+        }
+        return score.toInt().coerceIn(5, 98)
+    }
+
+    private fun pickSmartCounterItem(profile: BotProfileEntity, heroSpec: HeroMechanicsSpec): String {
+        val tags = profile.enemyCompTagsCsv
+        return when {
+            tags.contains("HEAL_TANK") ->
+                if (heroSpec.role == HeroRole.MAGE) "Sách Truy Hồn (Khắc chế Hồi máu)" else "Đao Truy Hồn (Khắc chế Hồi máu)"
+            tags.contains("HARD_CC") ->
+                "Giày Kiên Cường + Quả Cầu Băng Sương / Thanh Tẩy"
+            tags.contains("ASSASSIN_BURST") ->
+                "Khiên Thất Truyền + Giáp Hộ Mệnh (Đổi Liềm Đoạt Mệnh)"
+            tags.contains("POKE_MAGE") ->
+                "Huân Chương Troy (Kháng phép cao)"
+            else ->
+                heroSpec.coreItems.take(3).joinToString(" + ")
+        }
+    }
+
     fun forwardMicroMlp(inputs: FloatArray, weights: FloatArray): FloatArray {
         val w = if (weights.size == TOTAL_WEIGHTS) weights else createPresetWeights(HeroRole.MARKSMAN)
         val hidden = FloatArray(HIDDEN_SIZE)
         var offset = 0
 
-        // Tầng 1: 8 inputs -> 6 hidden (ReLU)
         for (h in 0 until HIDDEN_SIZE) {
             var sum = 0f
             for (i in 0 until INPUT_SIZE) {
@@ -315,10 +307,9 @@ object MicroBotBrain {
         }
         for (h in 0 until HIDDEN_SIZE) {
             val biased = hidden[h] + w[offset++]
-            hidden[h] = if (biased > 0f) biased else 0.05f * biased // Leaky ReLU
+            hidden[h] = if (biased > 0f) biased else 0.05f * biased
         }
 
-        // Tầng 2: 6 hidden -> 5 outputs
         val logits = FloatArray(OUTPUT_SIZE)
         for (o in 0 until OUTPUT_SIZE) {
             var sum = 0f
@@ -333,7 +324,6 @@ object MicroBotBrain {
             if (logits[o] > maxLogit) maxLogit = logits[o]
         }
 
-        // Softmax
         var sumExp = 0f
         val probs = FloatArray(OUTPUT_SIZE)
         for (o in 0 until OUTPUT_SIZE) {
@@ -349,9 +339,6 @@ object MicroBotBrain {
         return probs
     }
 
-    /**
-     * Huấn luyện trực tiếp mạng Micro-MLP ngay trên CPU điện thoại (Backpropagation nhẹ trên tập mẫu chiến thuật Liên Quân)
-     */
     fun trainOnDevice(
         initialWeights: FloatArray,
         role: HeroRole,
@@ -385,7 +372,6 @@ object MicroBotBrain {
                 val x = sample.first
                 val target = sample.second
 
-                // Forward
                 var idx = 0
                 for (h in 0 until HIDDEN_SIZE) {
                     var sum = 0f
@@ -425,7 +411,6 @@ object MicroBotBrain {
                 val targetProb = probs[target].coerceAtLeast(1e-5f)
                 totalLoss += -kotlin.math.ln(targetProb)
 
-                // Backward (Cross-Entropy + Softmax gradient)
                 for (o in 0 until OUTPUT_SIZE) {
                     dOut[o] = probs[o] - (if (o == target) 1f else 0f)
                 }
@@ -439,7 +424,6 @@ object MicroBotBrain {
                     dHidden[h] = gradH * reluDeriv
                 }
 
-                // Cập nhật W2, b2
                 for (o in 0 until OUTPUT_SIZE) {
                     for (h in 0 until HIDDEN_SIZE) {
                         val w2Idx = w2Offset + o * HIDDEN_SIZE + h
@@ -448,7 +432,6 @@ object MicroBotBrain {
                     w[b2Offset + o] -= learningRate * dOut[o]
                 }
 
-                // Cập nhật W1, b1
                 for (h in 0 until HIDDEN_SIZE) {
                     for (i in 0 until INPUT_SIZE) {
                         val w1Idx = h * INPUT_SIZE + i
@@ -472,39 +455,39 @@ object MicroBotBrain {
     }
 
     private fun buildTacticalTrainingSamples(role: HeroRole, retreatRatio: Float): List<Pair<FloatArray, Int>> {
-        val list = ArrayList<Pair<FloatArray, Int>>(40)
-        // [botHp, botMana, enemyHp, distEnemy, distAllyTower, enemyUnderTower, skillsReady, projectileThreat]
-        // Nhãn 4: RETREAT_HEAL khi máu thấp
+        val list = ArrayList<Pair<FloatArray, Int>>(45)
+        // [botHp, botMana, enemyHp, distEnemy, miaRatio, enemyUnderTower, skillsReady, projectileThreat]
+        // Nhãn 4: RETREAT_HEAL / BIẾN VỀ khi máu thấp hoặc bị vây
         list.add(floatArrayOf(retreatRatio * 0.6f, 0.5f, 0.8f, 0.3f, 0.6f, 0f, 0.5f, 0f) to 4)
-        list.add(floatArrayOf(retreatRatio * 0.85f, 0.2f, 0.9f, 0.25f, 0.7f, 0f, 0.2f, 0.8f) to 4)
-        list.add(floatArrayOf(0.15f, 0.1f, 0.6f, 0.4f, 0.5f, 1f, 0.3f, 0f) to 4)
+        list.add(floatArrayOf(retreatRatio * 0.85f, 0.2f, 0.9f, 0.25f, 0.8f, 0f, 0.2f, 0.8f) to 4)
+        list.add(floatArrayOf(0.15f, 0.1f, 0.6f, 0.4f, 0.4f, 1f, 0.3f, 0f) to 4)
         list.add(floatArrayOf(0.18f, 0.7f, 0.75f, 0.2f, 0.8f, 0f, 0.4f, 1f) to 4)
 
-        // Nhãn 0: ATTACK_COMBO khi địch thấp máu và đủ chiêu
-        list.add(floatArrayOf(0.85f, 0.8f, 0.22f, 0.25f, 0.4f, 0f, 0.9f, 0f) to 0)
-        list.add(floatArrayOf(0.75f, 0.6f, 0.15f, 0.2f, 0.5f, 1f, 1.0f, 0f) to 0)
-        list.add(floatArrayOf(0.90f, 0.7f, 0.30f, 0.3f, 0.4f, 0f, 0.8f, 0f) to 0)
+        // Nhãn 0: ATTACK_COMBO (Múa tướng kết liễu khi có chiêu & lợi thế máu)
+        list.add(floatArrayOf(0.85f, 0.8f, 0.22f, 0.25f, 0.2f, 0f, 0.9f, 0f) to 0)
+        list.add(floatArrayOf(0.75f, 0.6f, 0.15f, 0.2f, 0.2f, 1f, 1.0f, 0f) to 0)
+        list.add(floatArrayOf(0.90f, 0.7f, 0.35f, 0.3f, 0.2f, 0f, 0.85f, 0f) to 0)
         if (role == HeroRole.ASSASSIN || role == HeroRole.WARRIOR) {
-            list.add(floatArrayOf(0.80f, 0.7f, 0.55f, 0.22f, 0.5f, 0f, 0.9f, 0f) to 0)
-            list.add(floatArrayOf(0.70f, 0.6f, 0.45f, 0.18f, 0.4f, 0f, 0.75f, 0f) to 0)
+            list.add(floatArrayOf(0.80f, 0.7f, 0.55f, 0.22f, 0.2f, 0f, 0.9f, 0f) to 0)
+            list.add(floatArrayOf(0.75f, 0.6f, 0.48f, 0.18f, 0.2f, 0f, 0.8f, 0f) to 0)
         }
 
-        // Nhãn 1: KITE_POKE khi giao tranh tầm trung, máu ổn, địch chưa thấp máu
-        list.add(floatArrayOf(0.75f, 0.7f, 0.70f, 0.42f, 0.4f, 0f, 0.6f, 0f) to 1)
-        list.add(floatArrayOf(0.65f, 0.6f, 0.65f, 0.35f, 0.3f, 0f, 0.5f, 0.4f) to 1)
+        // Nhãn 1: KITE_POKE khi địch MIA cao hoặc cần giữ khoảng cách cấu rỉa
+        list.add(floatArrayOf(0.75f, 0.7f, 0.70f, 0.42f, 0.6f, 0f, 0.6f, 0f) to 1)
+        list.add(floatArrayOf(0.65f, 0.6f, 0.65f, 0.35f, 0.8f, 0f, 0.5f, 0.4f) to 1)
         if (role == HeroRole.MARKSMAN || role == HeroRole.MAGE) {
             list.add(floatArrayOf(0.80f, 0.75f, 0.55f, 0.30f, 0.4f, 0f, 0.7f, 0f) to 1)
-            list.add(floatArrayOf(0.60f, 0.5f, 0.80f, 0.28f, 0.35f, 0f, 0.4f, 0f) to 1)
+            list.add(floatArrayOf(0.60f, 0.5f, 0.80f, 0.28f, 0.6f, 0f, 0.4f, 0f) to 1)
         }
 
         // Nhãn 2: PUSH_LANE khi địch ở xa hoặc địch ôm trụ đầy máu
-        list.add(floatArrayOf(0.85f, 0.7f, 0.85f, 0.85f, 0.5f, 1f, 0.5f, 0f) to 2)
-        list.add(floatArrayOf(0.75f, 0.6f, 0.70f, 0.75f, 0.6f, 1f, 0.4f, 0f) to 2)
-        list.add(floatArrayOf(0.90f, 0.8f, 0.90f, 0.90f, 0.5f, 0f, 0.6f, 0f) to 2)
+        list.add(floatArrayOf(0.85f, 0.7f, 0.85f, 0.85f, 0.2f, 1f, 0.5f, 0f) to 2)
+        list.add(floatArrayOf(0.75f, 0.6f, 0.70f, 0.75f, 0.2f, 1f, 0.4f, 0f) to 2)
+        list.add(floatArrayOf(0.90f, 0.8f, 0.90f, 0.90f, 0.0f, 0f, 0.6f, 0f) to 2)
 
-        // Nhãn 3: FARM_JUNGLE khi địch xa và đang chờ hồi chiêu
+        // Nhãn 3: FARM_JUNGLE khi đang chờ hồi chiêu & ăn mục tiêu
         list.add(floatArrayOf(0.70f, 0.5f, 0.95f, 0.92f, 0.4f, 1f, 0.2f, 0f) to 3)
-        list.add(floatArrayOf(0.65f, 0.4f, 0.85f, 0.80f, 0.3f, 0f, 0.15f, 0f) to 3)
+        list.add(floatArrayOf(0.65f, 0.4f, 0.85f, 0.80f, 0.2f, 0f, 0.15f, 0f) to 3)
 
         return list
     }
@@ -512,7 +495,7 @@ object MicroBotBrain {
     fun createPresetWeights(role: HeroRole): FloatArray {
         val rng = Random(role.ordinal * 1337 + 42)
         val raw = FloatArray(TOTAL_WEIGHTS) { (rng.nextFloat() - 0.5f) * 0.6f }
-        return trainOnDevice(raw, role, retreatHpPercent = 26, epochs = 180, learningRate = 0.05f).updatedWeights
+        return trainOnDevice(raw, role, retreatHpPercent = 26, epochs = 200, learningRate = 0.05f).updatedWeights
     }
 
     fun weightsToCsv(weights: FloatArray): String =

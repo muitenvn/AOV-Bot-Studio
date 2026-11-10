@@ -29,11 +29,12 @@ import androidx.compose.material.icons.filled.AccessibilityNew
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Launch
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Radar
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -75,8 +76,10 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.R
 import com.example.data.BotProfileEntity
 import com.example.data.BrainMode
-import com.example.service.AovBotAccessibilityService
+import com.example.service.ExecutionBackendMode
 import com.example.service.RealServiceState
+import com.example.service.ShizukuManagerEngine
+import com.example.service.ShizukuStatusState
 import com.example.ui.theme.AmberHighlight
 import com.example.ui.theme.CrimsonDanger
 import com.example.ui.theme.DeepSlateBlue
@@ -93,12 +96,15 @@ fun RealGameControllerScreen(
     profiles: List<BotProfileEntity>,
     activeProfile: BotProfileEntity,
     serviceState: RealServiceState,
+    shizukuState: ShizukuStatusState,
     onSelectProfile: (Int) -> Unit,
     onChangeBrainMode: (BrainMode) -> Unit,
     onToggleAutoPlay: (Boolean) -> Unit,
     onUpdateScanInterval: (Long) -> Unit,
     onToggleOverlay: (Boolean) -> Unit,
-    onOpenTrainerSandbox: () -> Unit,
+    onConnectShizuku: () -> Unit,
+    onUnlockAccessibilityViaShizuku: () -> Unit,
+    onToggleShizukuDirectLoop: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -109,18 +115,19 @@ fun RealGameControllerScreen(
         mutableStateOf(isAccessibilityServiceEnabledInSystem(context))
     }
 
-    // Tự động kiểm tra lại quyền ngay khi người dùng quay về từ màn hình Cài đặt Android
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 systemSettingEnabled = isAccessibilityServiceEnabledInSystem(context)
+                ShizukuManagerEngine.checkShizukuEnvironment(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    val isReady = serviceState.isServiceConnected || systemSettingEnabled
+    val isAccessibilityReady = serviceState.isServiceConnected || systemSettingEnabled
+    val isAnyEngineReady = isAccessibilityReady || shizukuState.isShellPrivilegeGranted
     val activeBrainMode = runCatching { BrainMode.valueOf(activeProfile.brainMode) }.getOrDefault(BrainMode.HYBRID)
 
     Column(
@@ -130,7 +137,7 @@ fun RealGameControllerScreen(
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // 1. Banner Trung Tâm Điều Khiển Chạy Trên Game Thật
+        // 1. Header Hồ Sơ Tướng & Trạng Thái Kết Nối Game Thật
         Card(
             shape = RoundedCornerShape(18.dp),
             colors = CardDefaults.cardColors(containerColor = DeepSlateBlue),
@@ -139,7 +146,7 @@ fun RealGameControllerScreen(
             Box(modifier = Modifier.fillMaxWidth()) {
                 Image(
                     painter = painterResource(id = R.drawable.img_tactical_banner_1794320021323),
-                    contentDescription = "Biểu ngữ điều khiển Bot trên game Liên Quân thật",
+                    contentDescription = "Trung tâm điều khiển Bot Liên Quân thật",
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -152,7 +159,7 @@ fun RealGameControllerScreen(
                             Brush.verticalGradient(
                                 listOf(
                                     ObsidianNavy.copy(alpha = 0.55f),
-                                    ObsidianNavy.copy(alpha = 0.95f)
+                                    ObsidianNavy.copy(alpha = 0.96f)
                                 )
                             )
                         )
@@ -170,7 +177,7 @@ fun RealGameControllerScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "CHẾ ĐỘ CHẠY TRỰC TIẾP TRÊN GAME THẬT",
+                                text = "TƯỚNG: ${activeProfile.selectedHeroId} • ĐƯỜNG: ${activeProfile.assignedLane}",
                                 style = MaterialTheme.typography.labelLarge,
                                 color = ElectricCyan
                             )
@@ -183,11 +190,11 @@ fun RealGameControllerScreen(
                             )
                         }
                         Surface(
-                            color = if (isReady) EmeraldSuccess.copy(alpha = 0.18f) else CrimsonDanger.copy(alpha = 0.2f),
+                            color = if (isAnyEngineReady) EmeraldSuccess.copy(alpha = 0.18f) else AmberHighlight.copy(alpha = 0.2f),
                             shape = RoundedCornerShape(50),
                             modifier = Modifier.border(
                                 1.dp,
-                                if (isReady) EmeraldSuccess else CrimsonDanger,
+                                if (isAnyEngineReady) EmeraldSuccess else AmberHighlight,
                                 RoundedCornerShape(50)
                             )
                         ) {
@@ -200,19 +207,23 @@ fun RealGameControllerScreen(
                                     modifier = Modifier
                                         .size(8.dp)
                                         .clip(CircleShape)
-                                        .background(if (isReady) EmeraldSuccess else CrimsonDanger)
+                                        .background(if (isAnyEngineReady) EmeraldSuccess else AmberHighlight)
                                 )
                                 Text(
-                                    text = if (isReady) "ĐÃ BẬT HỖ TRỢ" else "CHƯA BẬT QUYỀN",
+                                    text = when {
+                                        shizukuState.isShizukuLoopRunning -> "SHIZUKU ĐANG CHẠY"
+                                        serviceState.isAutoPlaying -> "TRỢ NĂNG ĐANG CHẠY"
+                                        isAnyEngineReady -> "ĐÃ CÓ QUYỀN"
+                                        else -> "CHỌN QUYỀN BÊN DƯỚI"
+                                    },
                                     style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.Bold,
-                                    color = if (isReady) EmeraldSuccess else CrimsonDanger
+                                    color = if (isAnyEngineReady) EmeraldSuccess else AmberHighlight
                                 )
                             }
                         }
                     }
 
-                    // Chọn Hồ sơ Bot áp dụng cho Game Thật
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -226,7 +237,7 @@ fun RealGameControllerScreen(
                                 onClick = { onSelectProfile(prof.id) },
                                 label = {
                                     Text(
-                                        text = prof.name.substringBefore(" -"),
+                                        text = "${prof.selectedHeroId} (${prof.assignedLane.substringAfter("_")})",
                                         style = MaterialTheme.typography.labelSmall
                                     )
                                 },
@@ -242,7 +253,7 @@ fun RealGameControllerScreen(
             }
         }
 
-        // 2. Bảng Cấp Quyền Hỗ Trợ & Khởi Chạy Tự Động Quét Màn Hình
+        // 2. BẢNG QUYỀN SHIZUKU (Dùng khi máy chặn Trợ năng hoặc muốn chạy bằng quyền ADB Shell mượt nhất)
         Card(
             shape = RoundedCornerShape(18.dp),
             colors = CardDefaults.cardColors(containerColor = ElevatedTacticalCard),
@@ -250,7 +261,7 @@ fun RealGameControllerScreen(
                 .fillMaxWidth()
                 .border(
                     width = 1.5.dp,
-                    color = if (serviceState.isAutoPlaying) EmeraldSuccess else ElectricCyan.copy(alpha = 0.6f),
+                    color = if (shizukuState.isShizukuLoopRunning) EmeraldSuccess else TacticalGold.copy(alpha = 0.7f),
                     shape = RoundedCornerShape(18.dp)
                 )
         ) {
@@ -263,93 +274,163 @@ fun RealGameControllerScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Icon(
-                        imageVector = Icons.Default.AccessibilityNew,
-                        contentDescription = "Quyền Hỗ Trợ",
-                        tint = if (isReady) EmeraldSuccess else AmberHighlight
+                        imageVector = Icons.Default.Terminal,
+                        contentDescription = "Quyền Shizuku",
+                        tint = TacticalGold
                     )
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = if (isReady) {
-                                "DỊCH VỤ QUÉT MÀN HÌNH & TỰ BẤM ĐÃ SẴN SÀNG"
-                            } else {
-                                "BƯỚC 1: BẬT QUYỀN HỖ TRỢ (ACCESSIBILITY) ĐỂ CHƠI GAME THẬT"
-                            },
+                            text = "CÁCH 1: CHẠY BẰNG QUYỀN SHIZUKU (ADB SHELL MƯỢT NHẤT)",
                             style = MaterialTheme.typography.labelLarge,
-                            color = if (isReady) EmeraldSuccess else AmberHighlight
+                            color = TacticalGold
                         )
                         Text(
-                            text = if (isReady) {
-                                "Thanh điều khiển nổi [▶ CHẠY BOT] đã hiện trên màn hình. Hãy mở Liên Quân và bấm chạy!"
-                            } else {
-                                "Bấm nút bên dưới -> Chọn 'Ứng dụng đã cài đặt' -> Bật 'AOV Bot Tự Chơi Liên Quân'."
-                            },
-                            style = MaterialTheme.typography.bodyMedium,
+                            text = "Nếu điện thoại chặn Trợ năng ('Cài đặt bị hạn chế'), dùng Shizuku để chạy trực tiếp hoặc ép mở khóa Trợ năng 1 chạm!",
+                            style = MaterialTheme.typography.labelSmall,
                             color = Color.White.copy(alpha = 0.9f)
                         )
                     }
                 }
 
-                // Nút Mở Cài Đặt Quyền Hỗ Trợ
-                Button(
-                    onClick = { openAccessibilitySettings(context) },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (isReady) DeepSlateBlue else AmberHighlight,
-                        contentColor = if (isReady) ElectricCyan else ObsidianNavy
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp)
-                        .testTag("btn_open_accessibility_settings")
+                Surface(
+                    color = ObsidianNavy,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Icon(
-                        imageVector = if (isReady) Icons.Default.CheckCircle else Icons.Default.Settings,
-                        contentDescription = null
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = if (isReady) {
-                            "ĐÃ CẤP QUYỀN HỖ TRỢ (BẤM ĐỂ MỞ LẠI CÀI ĐẶT)"
-                        } else {
-                            "MỞ CÀI ĐẶT ANDROID ĐỂ CẤP QUYỀN HỖ TRỢ"
-                        },
-                        fontWeight = FontWeight.Bold
-                    )
+                    Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = "Trạng thái Shell: ${shizukuState.shellUidInfo}",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = if (shizukuState.isShellPrivilegeGranted) EmeraldSuccess else AmberHighlight
+                        )
+                        Text(
+                            text = shizukuState.lastStatusMessage,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MutedSteelGray
+                        )
+                    }
                 }
 
-                // Nút BẬT / DỪNG Tự Chơi Trên Game Thật & Nút Mở Liên Quân Mobile
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Button(
-                        onClick = {
-                            if (!isReady) {
-                                Toast.makeText(
-                                    context,
-                                    "Vui lòng bật Quyền Hỗ Trợ trong Cài đặt trước!",
-                                    Toast.LENGTH_SHORT
-                                ).show()
-                                openAccessibilitySettings(context)
-                            } else {
-                                onToggleAutoPlay(!serviceState.isAutoPlaying)
-                            }
-                        },
+                        onClick = onConnectShizuku,
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = if (serviceState.isAutoPlaying) CrimsonDanger else EmeraldSuccess,
-                            contentColor = if (serviceState.isAutoPlaying) Color.White else ObsidianNavy
+                            containerColor = TacticalGold,
+                            contentColor = ObsidianNavy
                         ),
                         modifier = Modifier
-                            .weight(1.15f)
-                            .height(50.dp)
-                            .testTag("btn_toggle_real_autoplay")
+                            .weight(1f)
+                            .height(46.dp)
+                            .testTag("btn_connect_shizuku")
+                    ) {
+                        Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Nhận Quyền Shizuku", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                    }
+
+                    OutlinedButton(
+                        onClick = onUnlockAccessibilityViaShizuku,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(46.dp)
+                            .testTag("btn_shizuku_unlock_accessibility")
+                    ) {
+                        Icon(Icons.Default.LockOpen, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Ép Bật Trợ Năng", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                Button(
+                    onClick = { onToggleShizukuDirectLoop(!shizukuState.isShizukuLoopRunning) },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (shizukuState.isShizukuLoopRunning) CrimsonDanger else EmeraldSuccess,
+                        contentColor = if (shizukuState.isShizukuLoopRunning) Color.White else ObsidianNavy
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("btn_toggle_shizuku_direct")
+                ) {
+                    Icon(
+                        imageVector = if (shizukuState.isShizukuLoopRunning) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = null
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (shizukuState.isShizukuLoopRunning) {
+                            "DỪNG LUỒNG SHIZUKU DIRECT SHELL"
+                        } else {
+                            "CHẠY BOT TRỰC TIẾP QUA SHIZUKU (KHÔNG CẦN TRỢ NĂNG)"
+                        },
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+
+        // 3. BẢNG QUYỀN HỖ TRỢ (ACCESSIBILITY SERVICE + THANH ĐIỀU KHIỂN NỔI TRONG GAME)
+        Card(
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = DeepSlateBlue),
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, ElectricCyan.copy(alpha = 0.5f), RoundedCornerShape(18.dp))
+        ) {
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AccessibilityNew,
+                        contentDescription = "Quyền Hỗ Trợ",
+                        tint = ElectricCyan
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "CÁCH 2: CHẠY BẰNG QUYỀN HỖ TRỢ (CÓ THANH NỔI TRONG GAME)",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = ElectricCyan
+                        )
+                        Text(
+                            text = "Hiện nút [▶ CHẠY BOT / ⏸ DỪNG BOT] nổi đè lên màn hình Liên Quân để bật/tắt ngay trong trận",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MutedSteelGray
+                        )
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = { openAccessibilitySettings(context) },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (isAccessibilityReady) ElevatedTacticalCard else ElectricCyan,
+                            contentColor = if (isAccessibilityReady) ElectricCyan else ObsidianNavy
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(46.dp)
+                            .testTag("btn_open_accessibility_settings")
                     ) {
                         Icon(
-                            imageVector = if (serviceState.isAutoPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = null
+                            imageVector = if (isAccessibilityReady) Icons.Default.CheckCircle else Icons.Default.Settings,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = if (serviceState.isAutoPlaying) "DỪNG QUÉT & BẤM" else "CHẠY BOT NGAY",
+                            text = if (isAccessibilityReady) "Đã Bật Trợ Năng" else "Mở Cài Đặt Trợ Năng",
+                            style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -357,17 +438,16 @@ fun RealGameControllerScreen(
                     OutlinedButton(
                         onClick = { launchRealAovGame(context) },
                         modifier = Modifier
-                            .weight(0.95f)
-                            .height(50.dp)
+                            .weight(1f)
+                            .height(46.dp)
                             .testTag("btn_launch_aov_game")
                     ) {
-                        Icon(Icons.Default.Launch, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Default.Launch, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Mở Liên Quân", fontWeight = FontWeight.Bold)
+                        Text("Mở Liên Quân", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                     }
                 }
 
-                // Công tắc hiện Thanh Điều Khiển Nổi đè lên màn hình Game
                 Surface(
                     color = ObsidianNavy,
                     shape = RoundedCornerShape(12.dp),
@@ -391,12 +471,12 @@ fun RealGameControllerScreen(
                             )
                             Column {
                                 Text(
-                                    text = "Thanh điều khiển nổi trong Game (HUD Overlay)",
+                                    text = "Hiện Thanh Điều Khiển Nổi Trong Game",
                                     style = MaterialTheme.typography.titleMedium,
                                     color = Color.White
                                 )
                                 Text(
-                                    text = "Kéo thả tự do trên màn hình Liên Quân để Bật/Dừng Bot tức thì",
+                                    text = "Hiển thị % Máu, Cảnh báo MIA Minimap & Hành động ngay góc màn hình",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MutedSteelGray
                                 )
@@ -415,10 +495,10 @@ fun RealGameControllerScreen(
             }
         }
 
-        // 3. Chọn Nhanh Chế Độ Bộ Não & Chu Kỳ Quét Màn Hình Thật
+        // 4. BỘ NÃO ĐANG CHẠY & TỐC ĐỘ QUÉT MÀN HÌNH THẬT
         Card(
             shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = DeepSlateBlue),
+            colors = CardDefaults.cardColors(containerColor = ElevatedTacticalCard),
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(
@@ -426,7 +506,7 @@ fun RealGameControllerScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(
-                    text = "BỘ NÃO XỬ LÝ & TỐC ĐỘ QUÉT MÀN HÌNH THẬT",
+                    text = "CHẾ ĐỘ ĐẦU NÃO CỦA BOT & NHỊP QUÉT MÀN HÌNH",
                     style = MaterialTheme.typography.labelLarge,
                     color = AmberHighlight
                 )
@@ -438,8 +518,8 @@ fun RealGameControllerScreen(
                     BrainMode.entries.forEach { mode ->
                         val isSelected = mode == activeBrainMode
                         val label = when (mode) {
-                            BrainMode.RULE_FSM -> "1. Luật Sẵn (0% AI)"
-                            BrainMode.MICRO_AI -> "2. Micro-AI Nội Bộ"
+                            BrainMode.RULE_FSM -> "1. Luật Cứng (0% AI)"
+                            BrainMode.MICRO_AI -> "2. AI Huấn Luyện"
                             BrainMode.HYBRID -> "3. Kết Hợp Hybrid"
                         }
                         Surface(
@@ -469,14 +549,13 @@ fun RealGameControllerScreen(
                     }
                 }
 
-                // Thanh trượt chỉnh chu kỳ quét màn hình (ms)
                 Column {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = "Chu kỳ chụp & quét màn hình liên tục:",
+                            text = "Tốc độ quét màn hình & ra đòn:",
                             style = MaterialTheme.typography.bodyMedium,
                             color = Color.White
                         )
@@ -489,7 +568,7 @@ fun RealGameControllerScreen(
                     Slider(
                         value = serviceState.scanIntervalMs.toFloat(),
                         onValueChange = { onUpdateScanInterval(it.toLong()) },
-                        valueRange = 180f..900f,
+                        valueRange = 160f..850f,
                         colors = SliderDefaults.colors(
                             thumbColor = EmeraldSuccess,
                             activeTrackColor = EmeraldSuccess
@@ -499,10 +578,10 @@ fun RealGameControllerScreen(
             }
         }
 
-        // 4. Bảng Giám Sát Dữ Liệu Quét Từ Màn Hình Thật (Real-time Pixel Scanner Telemetry)
+        // 5. THÔNG SỐ ĐỌC BẢN ĐỒ, GIAO TRANH, LÊN ĐỒ & MÚA TƯỚNG TRỰC TIẾP
         Card(
             shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = ElevatedTacticalCard),
+            colors = CardDefaults.cardColors(containerColor = DeepSlateBlue),
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(
@@ -525,7 +604,7 @@ fun RealGameControllerScreen(
                             modifier = Modifier.size(18.dp)
                         )
                         Text(
-                            text = "THÔNG SỐ QUÉT MÀN HÌNH THẬT (TRỰC TIẾP)",
+                            text = "PHÂN TÍCH TRẬN ĐẤU THẬT (BẢN ĐỒ • GIAO TRANH • ĐỒ)",
                             style = MaterialTheme.typography.labelLarge,
                             color = ElectricCyan
                         )
@@ -533,8 +612,7 @@ fun RealGameControllerScreen(
                     Text(
                         text = String.format(
                             Locale.US,
-                            "Quét: %.0fµs | Não: %.1fµs",
-                            serviceState.lastScanTimeMicros,
+                            "Não: %.1f µs",
                             serviceState.lastBrainTimeMicros
                         ),
                         style = MaterialTheme.typography.labelSmall,
@@ -546,22 +624,29 @@ fun RealGameControllerScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    StatColumn("KHUNG ĐÃ QUÉT", "${serviceState.framesScanned}", ElectricCyan)
-                    StatColumn("CỬ CHỈ ĐÃ BẤM", "${serviceState.gesturesDispatched}", TacticalGold)
                     StatColumn(
-                        "MỤC TIÊU ĐỊCH",
-                        if (serviceState.enemyLockedOnScreen) "ĐÃ KHÓA ĐỎ" else "ĐANG DÒ TÌM",
-                        if (serviceState.enemyLockedOnScreen) CrimsonDanger else MutedSteelGray
+                        "TỶ LỆ THẮNG ĐÁNH",
+                        "${serviceState.combatWinConfidencePct}%",
+                        if (serviceState.combatWinConfidencePct >= 60) EmeraldSuccess else CrimsonDanger
+                    )
+                    StatColumn(
+                        "ĐỊCH MẤT TÍCH (MIA)",
+                        "${serviceState.minimapMiaCount} Tướng",
+                        if (serviceState.minimapMiaCount >= activeProfile.minimapMiaAlertCount) AmberHighlight else ElectricCyan
+                    )
+                    StatColumn(
+                        "ĐÃ QUÉT / BẤM",
+                        "${serviceState.framesScanned}/${serviceState.gesturesDispatched}",
+                        TacticalGold
                     )
                 }
 
-                // Thanh máu quét được trên màn hình
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text("Máu tướng bạn (Quét thanh xanh tâm màn hình):", style = MaterialTheme.typography.labelSmall)
+                        Text("Máu bản thân (Biến về khi <= ${activeProfile.retreatHpPercent}%):", style = MaterialTheme.typography.labelSmall)
                         Text("${serviceState.detectedBotHpPercent}%", style = MaterialTheme.typography.labelLarge, color = EmeraldSuccess)
                     }
                     LinearProgressIndicator(
@@ -578,7 +663,7 @@ fun RealGameControllerScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text("Máu tướng địch (Quét thanh đỏ chiến trường):", style = MaterialTheme.typography.labelSmall)
+                        Text("Máu mục tiêu địch (Băng trụ khi <= ${activeProfile.diveTowerEnemyHpPercent}%):", style = MaterialTheme.typography.labelSmall)
                         Text("${serviceState.detectedEnemyHpPercent}%", style = MaterialTheme.typography.labelLarge, color = CrimsonDanger)
                     }
                     LinearProgressIndicator(
@@ -592,7 +677,6 @@ fun RealGameControllerScreen(
                     )
                 }
 
-                // Quyết định & Thao tác cảm ứng hiện tại
                 Surface(
                     color = ObsidianNavy,
                     shape = RoundedCornerShape(12.dp),
@@ -603,14 +687,19 @@ fun RealGameControllerScreen(
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         Text(
-                            text = "Hành động: ${serviceState.currentActionTitle}",
+                            text = "Quyết định: ${serviceState.currentActionTitle}",
                             style = MaterialTheme.typography.titleMedium,
                             color = AmberHighlight
                         )
                         Text(
-                            text = "Thao tác gửi lên màn hình: ${serviceState.lastGestureSummary}",
+                            text = "Thao tác Múa / Di chuyển: ${serviceState.lastGestureSummary}",
                             style = MaterialTheme.typography.bodyMedium,
                             color = ElectricCyan
+                        )
+                        Text(
+                            text = "Nhánh lên đồ khắc chế tự mua: ${serviceState.recommendedCounterItem}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = EmeraldSuccess
                         )
                         Text(
                             text = serviceState.currentActionReason,
@@ -620,11 +709,10 @@ fun RealGameControllerScreen(
                     }
                 }
 
-                // Nhật ký quét màn hình thật
                 if (serviceState.liveLogs.isNotEmpty()) {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(
-                            text = "Nhật ký quét & tự bấm gần nhất:",
+                            text = "Nhật ký đầu não xử lý trên Game Thật:",
                             style = MaterialTheme.typography.labelSmall,
                             color = AmberHighlight
                         )
@@ -638,18 +726,6 @@ fun RealGameControllerScreen(
                             )
                         }
                     }
-                }
-
-                // Nút phụ chuyển sang Phòng Huấn Luyện AI (Game ảo để dạy AI trước khi vào trận thật)
-                OutlinedButton(
-                    onClick = onOpenTrainerSandbox,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("btn_go_to_ai_trainer")
-                ) {
-                    Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Mở Phòng Huấn Luyện AI & Sân Tập Giả Lập (Chỉ dùng để dạy Bot)")
                 }
             }
         }
@@ -701,7 +777,7 @@ private fun launchRealAovGame(context: Context) {
     }
     Toast.makeText(
         context,
-        "Đã sẵn sàng thanh nổi! Hãy mở game Liên Quân Mobile từ màn hình chính của bạn.",
+        "Hãy mở game Liên Quân Mobile trên máy để Bot bắt đầu quét màn hình!",
         Toast.LENGTH_LONG
     ).show()
 }

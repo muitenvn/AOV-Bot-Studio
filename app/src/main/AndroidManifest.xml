@@ -6,6 +6,7 @@
         <package android:name="com.garena.game.kgvn" />
         <package android:name="com.garena.game.kgtw" />
         <package android:name="com.ngame.allstar.eu" />
+        <package android:name="moe.shizuku.privileged.api" />
     </queries>
 
     <application

@@ -1,6 +1,7 @@
 package com.example.viewmodel
 
 import android.app.Application
+import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.AppDatabase
@@ -9,14 +10,13 @@ import com.example.data.BotRepository
 import com.example.data.BrainMode
 import com.example.data.HeroRole
 import com.example.data.TargetPriority
-import com.example.engine.ArenaSimulationEngine
-import com.example.engine.ArenaSnapshot
-import com.example.engine.BrainDecisionResult
 import com.example.engine.MicroBotBrain
 import com.example.engine.TacticalInputState
 import com.example.engine.TrainingReport
 import com.example.service.AovBotAccessibilityService
 import com.example.service.RealServiceState
+import com.example.service.ShizukuManagerEngine
+import com.example.service.ShizukuStatusState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -37,32 +37,28 @@ data class TouchButtonCoord(
 
 class BotStudioViewModel(application: Application) : AndroidViewModel(application) {
     private val repository: BotRepository
-    private val arenaEngine = ArenaSimulationEngine()
 
     val profiles: StateFlow<List<BotProfileEntity>>
-
     val realServiceState: StateFlow<RealServiceState> = AovBotAccessibilityService.serviceState
+    val shizukuState: StateFlow<ShizukuStatusState> = ShizukuManagerEngine.shizukuState
 
     private val _selectedProfileId = MutableStateFlow<Int?>(null)
     val selectedProfileId: StateFlow<Int?> = _selectedProfileId.asStateFlow()
 
-    private val _arenaState = MutableStateFlow(ArenaSnapshot())
-    val arenaState: StateFlow<ArenaSnapshot> = _arenaState.asStateFlow()
-
-    private val _simulationSpeedMultiplier = MutableStateFlow(1)
-    val simulationSpeedMultiplier: StateFlow<Int> = _simulationSpeedMultiplier.asStateFlow()
-
-    // State cho màn hình Huấn luyện Micro-AI trên thiết bị
     private val _testInputState = MutableStateFlow(
         TacticalInputState(
-            botHpRatio = 0.72f,
+            botHpRatio = 0.78f,
             botManaRatio = 0.65f,
-            enemyHpRatio = 0.28f,
-            distToEnemyNorm = 0.32f,
+            enemyHpRatio = 0.32f,
+            distToEnemyNorm = 0.30f,
             distToAllyTowerNorm = 0.45f,
             enemyUnderTower = 0.0f,
             skillsReadyRatio = 1.0f,
-            incomingProjectileThreat = 0.0f
+            incomingProjectileThreat = 0.0f,
+            missingEnemiesMia = 1,
+            alliesNearbyCount = 2,
+            enemiesNearbyCount = 1,
+            groundFlowerDetected = true
         )
     )
     val testInputState: StateFlow<TacticalInputState> = _testInputState.asStateFlow()
@@ -80,13 +76,14 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
             TouchButtonCoord("SKILL_2", "Chiêu 2 (Khống chế/Lướt)", 78, 61),
             TouchButtonCoord("SKILL_3", "Chiêu 3 (Ultimate)", 87, 50),
             TouchButtonCoord("SPELL_HEAL", "Phép Bổ Trợ (Tốc biến/Cấp cứu)", 64, 86),
+            TouchButtonCoord("RECALL_BTN", "Nút Biến Về Hồi Máu/Mana", 54, 86),
             TouchButtonCoord("QUICK_SHOP", "Ô Mua Đồ Nhanh #1", 11, 42)
         )
     )
     val touchCoords: StateFlow<List<TouchButtonCoord>> = _touchCoords.asStateFlow()
 
     private var cachedWeightsProfileId: Int = -1
-    private var cachedWeightsArray: FloatArray = MicroBotBrain.createPresetWeights(HeroRole.MARKSMAN)
+    private var cachedWeightsArray: FloatArray = MicroBotBrain.createPresetWeights(HeroRole.WARRIOR)
 
     init {
         val dao = AppDatabase.getInstance(application).botDao()
@@ -99,10 +96,10 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
 
         viewModelScope.launch(Dispatchers.IO) {
             repository.seedDefaultProfilesIfNeeded()
+            ShizukuManagerEngine.checkShizukuEnvironment(application)
         }
 
-        // Đồng bộ liên tục cấu hình đang chọn sang Dịch vụ Quyền Hỗ Trợ (Chạy trên Game Thật)
-        // và cập nhật Sân tập giả lập khi mở tab Huấn luyện AI
+        // Đồng bộ liên tục cấu hình đang chọn sang Dịch vụ Quyền Hỗ Trợ & Shizuku
         viewModelScope.launch {
             while (isActive) {
                 val activeProfile = getActiveProfile()
@@ -113,17 +110,7 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
                 AovBotAccessibilityService.activeProfileConfig = activeProfile
                 AovBotAccessibilityService.activeWeights = cachedWeightsArray
                 AovBotAccessibilityService.activeTouchCoords = _touchCoords.value
-
-                val mult = _simulationSpeedMultiplier.value
-                repeat(mult) {
-                    _arenaState.value = arenaEngine.stepSimulation(
-                        current = _arenaState.value,
-                        profile = activeProfile,
-                        cachedWeights = cachedWeightsArray,
-                        dtSec = 0.05f
-                    )
-                }
-                delay(50L)
+                delay(250L)
             }
         }
     }
@@ -135,8 +122,10 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
             ?: list.firstOrNull()
             ?: BotProfileEntity(
                 id = 0,
-                name = "Valhein / Hayate - Xạ Thủ Thả Diều",
-                heroRole = HeroRole.MARKSMAN.name,
+                name = "Florentino - Múa Nhặt Hoa Đường Caesar",
+                selectedHeroId = "FLORENTINO",
+                assignedLane = "TOP_CAESAR",
+                heroRole = HeroRole.WARRIOR.name,
                 brainMode = BrainMode.HYBRID.name
             )
     }
@@ -149,6 +138,12 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
     fun updateActiveBrainMode(mode: BrainMode) {
         val current = getActiveProfile()
         val updated = current.copy(brainMode = mode.name, updatedAt = System.currentTimeMillis())
+        saveProfile(updated)
+    }
+
+    fun updateEnemyCompTags(tagsCsv: String) {
+        val current = getActiveProfile()
+        val updated = current.copy(enemyCompTagsCsv = tagsCsv, updatedAt = System.currentTimeMillis())
         saveProfile(updated)
     }
 
@@ -167,10 +162,22 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
         AovBotAccessibilityService.toggleFloatingOverlay(show)
     }
 
+    fun connectShizuku(context: Context) {
+        ShizukuManagerEngine.requestAndConnectShizuku(context)
+    }
+
+    fun unlockAccessibilityViaShizuku(context: Context) {
+        ShizukuManagerEngine.autoUnlockAndEnableAccessibilityViaShizuku(context)
+    }
+
+    fun toggleShizukuDirectLoop(context: Context, enabled: Boolean) {
+        ShizukuManagerEngine.toggleShizukuDirectBotLoop(context, enabled)
+    }
+
     fun saveProfile(profile: BotProfileEntity) {
         viewModelScope.launch(Dispatchers.IO) {
             val weights = if (profile.weightsCsv.isBlank()) {
-                val role = runCatching { HeroRole.valueOf(profile.heroRole) }.getOrDefault(HeroRole.MARKSMAN)
+                val role = runCatching { HeroRole.valueOf(profile.heroRole) }.getOrDefault(HeroRole.WARRIOR)
                 MicroBotBrain.weightsToCsv(MicroBotBrain.createPresetWeights(role))
             } else {
                 profile.weightsCsv
@@ -192,16 +199,20 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
             val weights = MicroBotBrain.createPresetWeights(role)
             val newProfile = BotProfileEntity(
                 name = name.ifBlank { "Bot ${role.displayName}" },
+                selectedHeroId = "FLORENTINO",
+                assignedLane = "TOP_CAESAR",
                 heroRole = role.name,
                 brainMode = mode.name,
-                retreatHpPercent = if (role == HeroRole.MARKSMAN || role == HeroRole.MAGE) 28 else 20,
+                retreatHpPercent = if (role == HeroRole.MARKSMAN || role == HeroRole.MAGE) 28 else 22,
+                recallManaPercent = 15,
                 diveTowerEnemyHpPercent = if (role == HeroRole.ASSASSIN) 20 else 14,
                 kitingDistance = role.baseRange.toInt(),
+                minimapMiaAlertCount = 2,
                 targetPriority = TargetPriority.LOWEST_HP_HERO.name,
-                comboSequence = if (role == HeroRole.ASSASSIN) "S2 -> S3 -> S1 -> AA" else "S1 -> S2 -> AA -> S3",
+                comboSequence = "S1 -> AA -> S2 -> Hoa -> S3",
                 weightsCsv = MicroBotBrain.weightsToCsv(weights),
-                trainedEpochs = 300,
-                lastAccuracyPercent = 93.5f
+                trainedEpochs = 500,
+                lastAccuracyPercent = 95.0f
             )
             val id = repository.insert(newProfile).toInt()
             _selectedProfileId.value = id
@@ -220,29 +231,13 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
-    fun toggleArenaPause() {
-        _arenaState.value = _arenaState.value.copy(isPaused = !_arenaState.value.isPaused)
-    }
-
-    fun cycleSimulationSpeed() {
-        _simulationSpeedMultiplier.value = if (_simulationSpeedMultiplier.value == 1) 2 else 1
-    }
-
-    fun resetArenaMatch() {
-        _arenaState.value = ArenaSnapshot()
-    }
-
-    fun triggerTacticalScenario(scenarioType: Int) {
-        _arenaState.value = arenaEngine.triggerScenario(_arenaState.value, scenarioType)
-    }
-
     fun updateTestInput(updater: (TacticalInputState) -> TacticalInputState) {
         _testInputState.value = updater(_testInputState.value)
     }
 
     fun trainMicroAiOnDevice(epochs: Int) {
         val active = getActiveProfile()
-        val role = runCatching { HeroRole.valueOf(active.heroRole) }.getOrDefault(HeroRole.MARKSMAN)
+        val role = runCatching { HeroRole.valueOf(active.heroRole) }.getOrDefault(HeroRole.WARRIOR)
         val currentWeights = MicroBotBrain.parseWeightsOrDefault(active)
         viewModelScope.launch {
             val report = withContext(Dispatchers.Default) {
@@ -286,22 +281,19 @@ class BotStudioViewModel(application: Application) : AndroidViewModel(applicatio
         return """
 {
   "botProfile": "${profile.name}",
-  "executionTarget": "REAL_GAME_ACCESSIBILITY_SERVICE",
-  "heroRole": "${profile.heroRole}",
+  "hero": "${profile.selectedHeroId}",
+  "lane": "${profile.assignedLane}",
+  "executionBackends": ["SHIZUKU_SHELL_UID_2000", "ACCESSIBILITY_SERVICE"],
   "brainEngine": "${profile.brainMode}",
-  "rules": {
-    "retreatHpPercent": ${profile.retreatHpPercent},
+  "tacticalRules": {
+    "recallHpPercent": ${profile.retreatHpPercent},
+    "recallManaPercent": ${profile.recallManaPercent},
     "diveTowerEnemyHpPercent": ${profile.diveTowerEnemyHpPercent},
+    "minimapMiaAlertCount": ${profile.minimapMiaAlertCount},
     "kitingDistancePx": ${profile.kitingDistance},
     "targetPriority": "${profile.targetPriority}",
-    "comboSequence": "${profile.comboSequence}",
-    "autoDodgePerpendicularVector": ${profile.autoDodgeSkillshot},
-    "autoJungleRotation": ${profile.autoJungleWhenLaneClear}
-  },
-  "microMlpModel": {
-    "architecture": "8-6-5 LeakyReLU + Softmax (89 float weights)",
-    "trainedEpochs": ${profile.trainedEpochs},
-    "accuracyPercent": ${"%.1f".format(java.util.Locale.US, profile.lastAccuracyPercent)}
+    "signatureCombo": "${profile.comboSequence}",
+    "enemyCompCounterTags": "${profile.enemyCompTagsCsv}"
   },
   "screenLayoutCoordinates": {
     $coordsJson

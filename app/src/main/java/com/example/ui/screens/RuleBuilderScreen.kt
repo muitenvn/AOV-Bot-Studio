@@ -56,6 +56,8 @@ import com.example.data.BotProfileEntity
 import com.example.data.BrainMode
 import com.example.data.HeroRole
 import com.example.data.TargetPriority
+import com.example.engine.AovHeroAndMetaDatabase
+import com.example.engine.AovLane
 import com.example.ui.theme.AmberHighlight
 import com.example.ui.theme.CrimsonDanger
 import com.example.ui.theme.DeepSlateBlue
@@ -79,15 +81,21 @@ fun RuleBuilderScreen(
     val scrollState = rememberScrollState()
 
     var name by remember(activeProfile.id) { mutableStateOf(activeProfile.name) }
+    var selectedHeroId by remember(activeProfile.id) { mutableStateOf(activeProfile.selectedHeroId) }
+    var assignedLane by remember(activeProfile.id) {
+        mutableStateOf(runCatching { AovLane.valueOf(activeProfile.assignedLane) }.getOrDefault(AovLane.TOP_CAESAR))
+    }
     var heroRole by remember(activeProfile.id) {
-        mutableStateOf(runCatching { HeroRole.valueOf(activeProfile.heroRole) }.getOrDefault(HeroRole.MARKSMAN))
+        mutableStateOf(runCatching { HeroRole.valueOf(activeProfile.heroRole) }.getOrDefault(HeroRole.WARRIOR))
     }
     var brainMode by remember(activeProfile.id) {
         mutableStateOf(runCatching { BrainMode.valueOf(activeProfile.brainMode) }.getOrDefault(BrainMode.HYBRID))
     }
     var retreatHp by remember(activeProfile.id) { mutableFloatStateOf(activeProfile.retreatHpPercent.toFloat()) }
+    var recallMana by remember(activeProfile.id) { mutableFloatStateOf(activeProfile.recallManaPercent.toFloat()) }
     var diveEnemyHp by remember(activeProfile.id) { mutableFloatStateOf(activeProfile.diveTowerEnemyHpPercent.toFloat()) }
     var kitingDist by remember(activeProfile.id) { mutableFloatStateOf(activeProfile.kitingDistance.toFloat()) }
+    var miaAlertCount by remember(activeProfile.id) { mutableFloatStateOf(activeProfile.minimapMiaAlertCount.toFloat()) }
     var targetPriority by remember(activeProfile.id) {
         mutableStateOf(
             runCatching { TargetPriority.valueOf(activeProfile.targetPriority) }
@@ -98,29 +106,30 @@ fun RuleBuilderScreen(
     var autoDodge by remember(activeProfile.id) { mutableStateOf(activeProfile.autoDodgeSkillshot) }
     var autoJungle by remember(activeProfile.id) { mutableStateOf(activeProfile.autoJungleWhenLaneClear) }
     var autoBuy by remember(activeProfile.id) { mutableStateOf(activeProfile.autoBuyEquipment) }
+    var autoSwapBlade by remember(activeProfile.id) { mutableStateOf(activeProfile.autoSwapResurrectionBlade) }
     var savedBannerVisible by remember { mutableStateOf(false) }
 
     LaunchedEffect(activeProfile) {
         name = activeProfile.name
-        heroRole = runCatching { HeroRole.valueOf(activeProfile.heroRole) }.getOrDefault(HeroRole.MARKSMAN)
+        selectedHeroId = activeProfile.selectedHeroId
+        assignedLane = runCatching { AovLane.valueOf(activeProfile.assignedLane) }.getOrDefault(AovLane.TOP_CAESAR)
+        heroRole = runCatching { HeroRole.valueOf(activeProfile.heroRole) }.getOrDefault(HeroRole.WARRIOR)
         brainMode = runCatching { BrainMode.valueOf(activeProfile.brainMode) }.getOrDefault(BrainMode.HYBRID)
         retreatHp = activeProfile.retreatHpPercent.toFloat()
+        recallMana = activeProfile.recallManaPercent.toFloat()
         diveEnemyHp = activeProfile.diveTowerEnemyHpPercent.toFloat()
         kitingDist = activeProfile.kitingDistance.toFloat()
+        miaAlertCount = activeProfile.minimapMiaAlertCount.toFloat()
         targetPriority = runCatching { TargetPriority.valueOf(activeProfile.targetPriority) }
             .getOrDefault(TargetPriority.LOWEST_HP_HERO)
         comboSequence = activeProfile.comboSequence
         autoDodge = activeProfile.autoDodgeSkillshot
         autoJungle = activeProfile.autoJungleWhenLaneClear
         autoBuy = activeProfile.autoBuyEquipment
+        autoSwapBlade = activeProfile.autoSwapResurrectionBlade
     }
 
-    val presetCombos = listOf(
-        "S2 -> S3 -> S1 -> AA",
-        "S1 -> S2 -> AA -> S3",
-        "S3 -> S2 -> S1 -> AA",
-        "S2 -> AA -> S1 -> AA"
-    )
+    val currentHeroSpec = AovHeroAndMetaDatabase.getHeroSpecByIdOrRole(selectedHeroId, heroRole.name)
 
     Column(
         modifier = modifier
@@ -129,7 +138,7 @@ fun RuleBuilderScreen(
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // Danh sách Hồ sơ Bot + Tạo mới
+        // 1. Chọn Hồ sơ & Tạo Mới
         Card(
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = DeepSlateBlue),
@@ -144,17 +153,17 @@ fun RuleBuilderScreen(
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Icon(
                             imageVector = Icons.Default.Tune,
-                            contentDescription = "Lập trình luật Bot",
+                            contentDescription = "Cấu hình đầu não Bot",
                             tint = ElectricCyan
                         )
                         Column {
                             Text(
-                                text = "TRÌNH LẬP TRÌNH LUẬT & CÂY HÀNH VI",
+                                text = "CƠ CHẾ MÚA TƯỚNG • ĐI ĐƯỜNG • BIẾN VỀ",
                                 style = MaterialTheme.typography.labelLarge,
                                 color = ElectricCyan
                             )
                             Text(
-                                text = "Thiết lập ngưỡng phản xạ 0ms không cần gọi đám mây",
+                                text = "Thiết lập cách chơi sâu cho từng tướng trong Liên Quân thật",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MutedSteelGray
                             )
@@ -164,7 +173,7 @@ fun RuleBuilderScreen(
                     OutlinedButton(
                         onClick = {
                             onCreateNewProfile(
-                                "Bot Tùy Chỉnh #${profiles.size + 1}",
+                                "Bot Chiến Thuật #${profiles.size + 1}",
                                 HeroRole.WARRIOR,
                                 BrainMode.HYBRID
                             )
@@ -173,7 +182,7 @@ fun RuleBuilderScreen(
                     ) {
                         Icon(Icons.Default.Add, contentDescription = "Tạo Bot mới", modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.size(4.dp))
-                        Text("Tạo Mới", style = MaterialTheme.typography.labelSmall)
+                        Text("Thêm Bot", style = MaterialTheme.typography.labelSmall)
                     }
                 }
 
@@ -198,7 +207,7 @@ fun RuleBuilderScreen(
             }
         }
 
-        // Thông tin Tên & Chất tướng
+        // 2. Chọn Vị Tướng Cụ Thể & Cách "Múa" Đặc Trưng (Florentino nhặt hoa, Nakroth lướt ngược, Tulen tích ấn...)
         Card(
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = ElevatedTacticalCard),
@@ -206,7 +215,7 @@ fun RuleBuilderScreen(
         ) {
             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    text = "1. ĐỊNH DANH & CHẤT TƯỚNG LIÊN QUÂN",
+                    text = "1. CHỌN TƯỚNG & CÁCH MÚA RIÊNG BIỆT (MICRO-COMBO)",
                     style = MaterialTheme.typography.labelLarge,
                     color = AmberHighlight
                 )
@@ -214,7 +223,7 @@ fun RuleBuilderScreen(
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("Tên cấu hình Bot") },
+                    label = { Text("Tên hồ sơ chiến thuật") },
                     singleLine = true,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -222,14 +231,14 @@ fun RuleBuilderScreen(
                 )
 
                 Text(
-                    text = "Chọn Chất Tướng (Tự động tối ưu tầm đánh & tốc chạy):",
+                    text = "Chọn Tướng để nạp cơ chế vuốt chiêu / nhặt hoa / lướt ngược:",
                     style = MaterialTheme.typography.labelSmall,
                     color = MutedSteelGray
                 )
 
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    HeroRole.entries.forEach { roleItem ->
-                        val isSelected = roleItem == heroRole
+                    AovHeroAndMetaDatabase.ALL_HERO_SPECS.forEach { spec ->
+                        val isSelected = spec.id == selectedHeroId
                         Surface(
                             color = if (isSelected) ElectricCyan.copy(alpha = 0.16f) else ObsidianNavy,
                             shape = RoundedCornerShape(10.dp),
@@ -237,8 +246,12 @@ fun RuleBuilderScreen(
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(10.dp))
                                 .clickable {
-                                    heroRole = roleItem
-                                    kitingDist = roleItem.baseRange
+                                    selectedHeroId = spec.id
+                                    heroRole = spec.role
+                                    assignedLane = spec.recommendedLane
+                                    kitingDist = spec.role.baseRange
+                                    comboSequence = spec.signatureComboSteps.joinToString(" -> ") { it.stepTitle }
+                                    name = "${spec.heroName.substringBefore(" (")} - ${spec.recommendedLane.shortVi}"
                                 }
                                 .border(
                                     1.dp,
@@ -251,25 +264,76 @@ fun RuleBuilderScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = spec.heroName,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (isSelected) ElectricCyan else Color.White
+                                    )
+                                    Text(
+                                        text = "${spec.tierMeta} • Phép: ${spec.recommendedSpell}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = AmberHighlight
+                                    )
+                                }
                                 Text(
-                                    text = roleItem.displayName,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                    color = if (isSelected) ElectricCyan else Color.White
-                                )
-                                Text(
-                                    text = "Tầm: ${roleItem.baseRange.toInt()}px",
+                                    text = spec.recommendedLane.shortVi,
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MutedSteelGray
+                                    color = EmeraldSuccess
                                 )
                             }
+                        }
+                    }
+                }
+
+                // Hiển thị chi tiết Cách Múa & Khi nào đánh của vị tướng đang chọn
+                Surface(
+                    color = ObsidianNavy,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, ElectricCyan.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                ) {
+                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = "CÁCH MÚA ${currentHeroSpec.heroName.uppercase()}:",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = ElectricCyan
+                        )
+                        Text(
+                            text = currentHeroSpec.mechanicsSummaryVi,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color.White
+                        )
+                        Text(
+                            text = "• Khi nào nên đánh: ${currentHeroSpec.whenToFightVi}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = EmeraldSuccess
+                        )
+                        Text(
+                            text = "• Khi nào nên biến về: ${currentHeroSpec.whenToRecallVi}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AmberHighlight
+                        )
+                        Text(
+                            text = "• Chuỗi thao tác tay tự động:",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MutedSteelGray
+                        )
+                        currentHeroSpec.signatureComboSteps.forEach { step ->
+                            Text(
+                                text = "   ${step.stepTitle}: ${step.descriptionVi} (${step.delayAfterMs}ms)",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White.copy(alpha = 0.9f)
+                            )
                         }
                     }
                 }
             }
         }
 
-        // Ngưỡng Sinh Tồn, Băng Trụ & Khoảng Cách Thả Diều
+        // 3. Chọn Đường Đi (Lane) & Đọc Bản Đồ Nhỏ (Minimap MIA Chống Gank)
         Card(
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = DeepSlateBlue),
@@ -277,44 +341,116 @@ fun RuleBuilderScreen(
         ) {
             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    text = "2. CÔNG THỨC SINH TỒN & VỊ TRÍ (0MS DETERMINISTIC)",
+                    text = "2. ĐI ĐƯỜNG GÌ & ĐỌC BẢN ĐỒ NHỎ (MINIMAP VISION)",
                     style = MaterialTheme.typography.labelLarge,
                     color = ElectricCyan
                 )
 
-                // Slider 1: Ngưỡng máu rút lui
+                AovLane.entries.forEach { lane ->
+                    val isSelected = lane == assignedLane
+                    Surface(
+                        color = if (isSelected) EmeraldSuccess.copy(alpha = 0.16f) else ObsidianNavy,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable { assignedLane = lane }
+                            .border(
+                                1.dp,
+                                if (isSelected) EmeraldSuccess else Color(0xFF283A5E),
+                                RoundedCornerShape(10.dp)
+                            )
+                    ) {
+                        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                            Text(
+                                text = lane.titleVi,
+                                style = MaterialTheme.typography.titleMedium,
+                                color = if (isSelected) EmeraldSuccess else Color.White
+                            )
+                            Text(
+                                text = lane.macroStrategyVi,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MutedSteelGray
+                            )
+                        }
+                    }
+                }
+
                 Column {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text("Ngưỡng máu tự rút lui về trụ & Hồi máu:", style = MaterialTheme.typography.bodyMedium)
+                        Text("Số địch mất tích trên Minimap (MIA) thì lùi ôm trụ:", style = MaterialTheme.typography.bodyMedium)
                         Text(
-                            "${retreatHp.toInt()}% HP",
+                            ">= ${miaAlertCount.toInt()} Tướng",
                             style = MaterialTheme.typography.labelLarge,
-                            color = EmeraldSuccess
+                            color = AmberHighlight
                         )
+                    }
+                    Slider(
+                        value = miaAlertCount,
+                        onValueChange = { miaAlertCount = it },
+                        valueRange = 1f..4f,
+                        steps = 2,
+                        colors = SliderDefaults.colors(thumbColor = AmberHighlight, activeTrackColor = AmberHighlight)
+                    )
+                }
+            }
+        }
+
+        // 4. Khi Nào Biến Về, Khi Nào Băng Trụ & Khoảng Cách Thả Diều
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = ElevatedTacticalCard),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = "3. KHI NÀO BIẾN VỀ • KHI NÀO ĐÁNH • LÊN ĐỒ",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = TacticalGold
+                )
+
+                Column {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Máu thấp tự lùi bụi/trụ & bấm Biến Về:", style = MaterialTheme.typography.bodyMedium)
+                        Text("${retreatHp.toInt()}% HP", style = MaterialTheme.typography.labelLarge, color = EmeraldSuccess)
                     }
                     Slider(
                         value = retreatHp,
                         onValueChange = { retreatHp = it },
-                        valueRange = 10f..55f,
+                        valueRange = 12f..50f,
                         colors = SliderDefaults.colors(thumbColor = EmeraldSuccess, activeTrackColor = EmeraldSuccess)
                     )
                 }
 
-                // Slider 2: Ngưỡng máu địch cho phép băng trụ
+                Column {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Mana cạn tự bấm Biến Về (Pháp sư / Sát thủ):", style = MaterialTheme.typography.bodyMedium)
+                        Text("${recallMana.toInt()}% Mana", style = MaterialTheme.typography.labelLarge, color = ElectricCyan)
+                    }
+                    Slider(
+                        value = recallMana,
+                        onValueChange = { recallMana = it },
+                        valueRange = 5f..35f,
+                        colors = SliderDefaults.colors(thumbColor = ElectricCyan, activeTrackColor = ElectricCyan)
+                    )
+                }
+
                 Column {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text("Máu địch tối đa cho phép Băng Trụ kết liễu:", style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            "${diveEnemyHp.toInt()}% HP",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = CrimsonDanger
-                        )
+                        Text("${diveEnemyHp.toInt()}% HP", style = MaterialTheme.typography.labelLarge, color = CrimsonDanger)
                     }
                     Slider(
                         value = diveEnemyHp,
@@ -324,18 +460,13 @@ fun RuleBuilderScreen(
                     )
                 }
 
-                // Slider 3: Khoảng cách thả diều
                 Column {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text("Khoảng cách giữ vị trí Thả Diều (Kiting):", style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            "${kitingDist.toInt()} đơn vị",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = ElectricCyan
-                        )
+                        Text("Khoảng cách giữ cự ly Thả Diều (Kiting):", style = MaterialTheme.typography.bodyMedium)
+                        Text("${kitingDist.toInt()}px", style = MaterialTheme.typography.labelLarge, color = ElectricCyan)
                     }
                     Slider(
                         value = kitingDist,
@@ -344,24 +475,9 @@ fun RuleBuilderScreen(
                         colors = SliderDefaults.colors(thumbColor = ElectricCyan, activeTrackColor = ElectricCyan)
                     )
                 }
-            }
-        }
-
-        // Thứ tự ưu tiên Mục tiêu & Chuỗi Combo Kỹ năng
-        Card(
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = ElevatedTacticalCard),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(
-                    text = "3. ƯU TIÊN MỤC TIÊU & CHUỖI COMBO CHIÊU THỨC",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = TacticalGold
-                )
 
                 Text(
-                    text = "Thứ tự khóa mục tiêu khi giao tranh:",
+                    text = "Thứ tự khóa mục tiêu ưu tiên:",
                     style = MaterialTheme.typography.labelSmall,
                     color = MutedSteelGray
                 )
@@ -389,48 +505,28 @@ fun RuleBuilderScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "Chuỗi tung chiêu cực nhanh (S1=Chiêu 1, S2=Chiêu 2, S3=Ulti, AA=Đánh thường):",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MutedSteelGray
-                )
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    presetCombos.forEach { preset ->
-                        FilterChip(
-                            selected = comboSequence == preset,
-                            onClick = { comboSequence = preset },
-                            label = { Text(preset, style = MaterialTheme.typography.labelSmall) }
-                        )
-                    }
-                }
-
-                // 3 Công tắc phản xạ tự động
                 TacticalToggleRow(
-                    title = "Phản xạ Lách 90° né chiêu định hướng",
-                    subtitle = "Tính vector vuông góc với đường đạn bay tới trong < 0.01ms",
+                    title = "Lách 90° né chiêu định hướng tự động",
+                    subtitle = "Quét vòng cảnh báo đỏ và kéo Joystick vuông góc tức thì",
                     checked = autoDodge,
                     onCheckedChange = { autoDodge = it }
                 )
                 TacticalToggleRow(
-                    title = "Tự động xoay sang Ăn Rừng / Bùa Đỏ",
-                    subtitle = "Khi đã dọn hết đợt lính đường giữa và máu > ngưỡng rút lui",
+                    title = "Tự động Mua Đồ Khắc Chế & Đổi Giáp Hộ Mệnh",
+                    subtitle = "Tự mua Đao/Sách Truy Hồn, Giày Kiên Cường và đổi Liềm Đoạt Mệnh cuối trận",
+                    checked = autoBuy,
+                    onCheckedChange = {
+                        autoBuy = it
+                        autoSwapBlade = it
+                    }
+                )
+                TacticalToggleRow(
+                    title = "Tự động xoay ăn Rừng / Rồng / Caesar khi đẩy xong lính",
+                    subtitle = "Tối ưu lượng vàng mỗi phút (GPM) và kiểm soát mục tiêu lớn",
                     checked = autoJungle,
                     onCheckedChange = { autoJungle = it }
                 )
-                TacticalToggleRow(
-                    title = "Tự động mua Trang bị Đề xuất ngay khi đủ vàng",
-                    subtitle = "Mua đồ tức thì không làm gián đoạn nhịp di chuyển",
-                    checked = autoBuy,
-                    onCheckedChange = { autoBuy = it }
-                )
 
-                // Nút Lưu & Xóa
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -441,16 +537,21 @@ fun RuleBuilderScreen(
                             onSaveProfile(
                                 activeProfile.copy(
                                     name = name,
+                                    selectedHeroId = selectedHeroId,
+                                    assignedLane = assignedLane.name,
                                     heroRole = heroRole.name,
                                     brainMode = brainMode.name,
                                     retreatHpPercent = retreatHp.toInt(),
+                                    recallManaPercent = recallMana.toInt(),
                                     diveTowerEnemyHpPercent = diveEnemyHp.toInt(),
                                     kitingDistance = kitingDist.toInt(),
+                                    minimapMiaAlertCount = miaAlertCount.toInt(),
                                     targetPriority = targetPriority.name,
                                     comboSequence = comboSequence,
                                     autoDodgeSkillshot = autoDodge,
                                     autoJungleWhenLaneClear = autoJungle,
-                                    autoBuyEquipment = autoBuy
+                                    autoBuyEquipment = autoBuy,
+                                    autoSwapResurrectionBlade = autoSwapBlade
                                 )
                             )
                             savedBannerVisible = true
@@ -463,7 +564,7 @@ fun RuleBuilderScreen(
                     ) {
                         Icon(Icons.Default.Save, contentDescription = "Lưu cấu hình")
                         Spacer(modifier = Modifier.size(6.dp))
-                        Text("LƯU CẤU HÌNH BOT", fontWeight = FontWeight.Bold)
+                        Text("LƯU CHIẾN THUẬT & ÁP DỤNG NGAY", fontWeight = FontWeight.Bold)
                     }
 
                     if (profiles.size > 1) {
@@ -496,7 +597,7 @@ fun RuleBuilderScreen(
                             modifier = Modifier.size(16.dp)
                         )
                         Text(
-                            text = "Đã cập nhật luật chiến thuật vào bộ nhớ thiết bị! Sân đấu đã áp dụng ngay.",
+                            text = "Đã nạp cách múa ${currentHeroSpec.heroName} & chiến thuật đi đường vào bộ não Bot!",
                             style = MaterialTheme.typography.labelSmall,
                             color = EmeraldSuccess
                         )

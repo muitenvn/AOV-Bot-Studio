@@ -22,7 +22,9 @@ import android.widget.TextView
 import com.example.data.BotProfileEntity
 import com.example.data.BrainMode
 import com.example.data.HeroRole
+import com.example.engine.AovHeroAndMetaDatabase
 import com.example.engine.BotTacticalAction
+import com.example.engine.BrainDecisionResult
 import com.example.engine.MicroBotBrain
 import com.example.engine.RealScreenScanResult
 import com.example.engine.ScreenPixelAnalyzer
@@ -50,16 +52,19 @@ data class RealServiceState(
     val isServiceConnected: Boolean = false,
     val isAutoPlaying: Boolean = false,
     val isOverlayShown: Boolean = true,
-    val scanIntervalMs: Long = 380L,
+    val scanIntervalMs: Long = 350L,
     val framesScanned: Long = 0L,
     val gesturesDispatched: Long = 0L,
     val lastScanTimeMicros: Float = 0f,
     val lastBrainTimeMicros: Float = 0f,
-    val detectedBotHpPercent: Int = 80,
-    val detectedEnemyHpPercent: Int = 65,
+    val detectedBotHpPercent: Int = 82,
+    val detectedEnemyHpPercent: Int = 60,
     val enemyLockedOnScreen: Boolean = false,
+    val minimapMiaCount: Int = 1,
+    val combatWinConfidencePct: Int = 72,
+    val recommendedCounterItem: String = "Giày Kiên Cường + Đao Truy Hồn",
     val currentActionTitle: String = "Đang chờ bật Tự Chơi",
-    val currentActionReason: String = "Mở game Liên Quân và bấm [CHẠY BOT] trên thanh điều khiển nổi",
+    val currentActionReason: String = "Bật Quyền Hỗ Trợ hoặc Shizuku để bắt đầu quét màn hình Liên Quân thật",
     val lastGestureSummary: String = "Chưa gửi thao tác",
     val liveLogs: List<String> = emptyList()
 )
@@ -76,13 +81,15 @@ class AovBotAccessibilityService : AccessibilityService() {
         @Volatile
         var activeProfileConfig: BotProfileEntity = BotProfileEntity(
             id = 1,
-            name = "Valhein / Hayate - Xạ Thủ Thả Diều",
-            heroRole = HeroRole.MARKSMAN.name,
+            name = "Florentino - Múa Nhặt Hoa Đường Caesar",
+            selectedHeroId = "FLORENTINO",
+            assignedLane = "TOP_CAESAR",
+            heroRole = HeroRole.WARRIOR.name,
             brainMode = BrainMode.HYBRID.name
         )
 
         @Volatile
-        var activeWeights: FloatArray = MicroBotBrain.createPresetWeights(HeroRole.MARKSMAN)
+        var activeWeights: FloatArray = MicroBotBrain.createPresetWeights(HeroRole.WARRIOR)
 
         @Volatile
         var activeTouchCoords: List<TouchButtonCoord> = listOf(
@@ -94,6 +101,7 @@ class AovBotAccessibilityService : AccessibilityService() {
             TouchButtonCoord("SKILL_2", "Chiêu 2 (Khống chế/Lướt)", 78, 61),
             TouchButtonCoord("SKILL_3", "Chiêu 3 (Ultimate)", 87, 50),
             TouchButtonCoord("SPELL_HEAL", "Phép Bổ Trợ (Tốc biến/Cấp cứu)", 64, 86),
+            TouchButtonCoord("RECALL_BTN", "Nút Biến Về Hồi Máu/Mana", 54, 86),
             TouchButtonCoord("QUICK_SHOP", "Ô Mua Đồ Nhanh #1", 11, 42)
         )
 
@@ -107,13 +115,49 @@ class AovBotAccessibilityService : AccessibilityService() {
 
         fun setScanIntervalMs(intervalMs: Long) {
             _serviceState.value = _serviceState.value.copy(
-                scanIntervalMs = intervalMs.coerceIn(180L, 1200L)
+                scanIntervalMs = intervalMs.coerceIn(160L, 1200L)
             )
         }
 
         fun toggleFloatingOverlay(show: Boolean) {
             _serviceState.value = _serviceState.value.copy(isOverlayShown = show)
             instance?.applyOverlayVisibility(show)
+        }
+
+        fun recordExternalShizukuTick(
+            scan: RealScreenScanResult,
+            decision: BrainDecisionResult,
+            gestureSummary: String
+        ) {
+            val logs = _serviceState.value.liveLogs.toMutableList()
+            val entry = String.format(
+                Locale.US,
+                "[Shizuku %.0fµs | Tỷ lệ thắng %d%%] %s -> %s",
+                decision.executionMicros,
+                decision.combatWinConfidencePct,
+                decision.action.titleVi.substringBefore(" ("),
+                gestureSummary
+            )
+            logs.add(0, entry)
+            if (logs.size > 15) logs.removeAt(logs.lastIndex)
+
+            _serviceState.value = _serviceState.value.copy(
+                framesScanned = _serviceState.value.framesScanned + 1L,
+                gesturesDispatched = _serviceState.value.gesturesDispatched + 1L,
+                lastScanTimeMicros = scan.scanTimeMicros,
+                lastBrainTimeMicros = decision.executionMicros,
+                detectedBotHpPercent = (scan.botHpRatio * 100).toInt(),
+                detectedEnemyHpPercent = (scan.enemyHpRatio * 100).toInt(),
+                enemyLockedOnScreen = scan.enemyDetected,
+                minimapMiaCount = scan.minimapMissingEnemiesMia,
+                combatWinConfidencePct = decision.combatWinConfidencePct,
+                recommendedCounterItem = decision.recommendedCounterItem,
+                currentActionTitle = decision.action.titleVi,
+                currentActionReason = decision.reasonVi,
+                lastGestureSummary = gestureSummary,
+                liveLogs = logs
+            )
+            instance?.updateOverlayUi()
         }
     }
 
@@ -131,15 +175,13 @@ class AovBotAccessibilityService : AccessibilityService() {
         instance = this
         _serviceState.value = _serviceState.value.copy(
             isServiceConnected = true,
-            currentActionTitle = "Quyền Hỗ Trợ Đã Sẵn Sàng"
+            currentActionTitle = "Quyền Hỗ Trợ Đã Kết Nối"
         )
         setupFloatingTacticalOverlay()
         startContinuousScreenScanAndPlayLoop()
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // Không cần xử lý cây View XML vì Liên Quân vẽ bằng Unity/OpenGL Canvas,
-        // chúng ta quét trực tiếp điểm ảnh màn hình qua takeScreenshot() + dispatchGesture().
     }
 
     override fun onInterrupt() {
@@ -158,19 +200,13 @@ class AovBotAccessibilityService : AccessibilityService() {
         super.onDestroy()
     }
 
-    /**
-     * Vòng lặp chính chạy trên Game Thật:
-     * 1. Chụp màn hình thật qua takeScreenshot() (API 30+)
-     * 2. Quét điểm ảnh siêu tốc bằng ScreenPixelAnalyzer (< 2ms)
-     * 3. Chạy MicroBotBrain (Luật FSM / Micro-MLP / Hybrid) (< 0.05ms)
-     * 4. Gửi cử chỉ vuốt Joystick + bấm Chiêu thức thật bằng dispatchGesture()
-     */
     private fun startContinuousScreenScanAndPlayLoop() {
         serviceScope.launch {
             var tickCounter = 0L
             while (isActive) {
                 val state = _serviceState.value
-                if (!state.isAutoPlaying) {
+                // Nếu đang chạy chế độ Shizuku Direct độc lập thì để ShizukuManagerEngine xử lý
+                if (!state.isAutoPlaying || ShizukuManagerEngine.shizukuState.value.isShizukuLoopRunning) {
                     delay(200L)
                     continue
                 }
@@ -179,17 +215,13 @@ class AovBotAccessibilityService : AccessibilityService() {
                 val profile = activeProfileConfig
                 val coords = activeTouchCoords
 
-                // 1. Chụp màn hình & Quét điểm ảnh thật
                 val scanResult = captureAndAnalyzeScreen(coords)
-
-                // 2. Đưa vào Bộ não Bot để ra quyết định tức thì
                 val decision = MicroBotBrain.decide(
                     state = scanResult.tacticalInput,
                     profile = profile,
                     cachedWeights = activeWeights
                 )
 
-                // 3. Thực thi cử chỉ chạm / vuốt thật lên màn hình game
                 val gestureDescText = executeTacticalGestureOnRealScreen(
                     decisionAction = decision.action,
                     scan = scanResult,
@@ -198,14 +230,13 @@ class AovBotAccessibilityService : AccessibilityService() {
                     tick = tickCounter
                 )
 
-                // 4. Cập nhật thông số thời gian thực
                 val currentLogs = _serviceState.value.liveLogs.toMutableList()
                 val logLine = String.format(
                     Locale.US,
-                    "[Quét %.0fµs | Não %.1fµs] Máu %d%% | %s -> %s",
+                    "[Quét %.0fµs | Thắng %d%% | MIA:%d] %s -> %s",
                     scanResult.scanTimeMicros,
-                    decision.executionMicros,
-                    (scanResult.botHpRatio * 100).toInt(),
+                    decision.combatWinConfidencePct,
+                    scanResult.minimapMissingEnemiesMia,
                     decision.action.titleVi.substringBefore(" ("),
                     gestureDescText
                 )
@@ -220,6 +251,9 @@ class AovBotAccessibilityService : AccessibilityService() {
                     detectedBotHpPercent = (scanResult.botHpRatio * 100).toInt(),
                     detectedEnemyHpPercent = (scanResult.enemyHpRatio * 100).toInt(),
                     enemyLockedOnScreen = scanResult.enemyDetected,
+                    minimapMiaCount = scanResult.minimapMissingEnemiesMia,
+                    combatWinConfidencePct = decision.combatWinConfidencePct,
+                    recommendedCounterItem = decision.recommendedCounterItem,
                     currentActionTitle = decision.action.titleVi,
                     currentActionReason = decision.reasonVi,
                     lastGestureSummary = gestureDescText,
@@ -274,9 +308,6 @@ class AovBotAccessibilityService : AccessibilityService() {
         }
     }
 
-    /**
-     * Chuyển đổi quyết định chiến thuật thành thao tác vuốt Joystick + bấm nút kỹ năng trên màn hình thật
-     */
     private fun executeTacticalGestureOnRealScreen(
         decisionAction: BotTacticalAction,
         scan: RealScreenScanResult,
@@ -295,47 +326,55 @@ class AovBotAccessibilityService : AccessibilityService() {
         val (joyX, joyY) = coordPx("JOYSTICK", 18, 76)
         val joyRadius = max(65f, screenW * 0.065f)
 
-        // Tự động mua đồ nhanh ở góc trái mỗi 8 nhịp nếu có sẵn
+        // Tự động mua đồ khắc chế ở ô góc trái
         if (profile.autoBuyEquipment && scan.quickShopAvailable && tick % 8L == 0L) {
             val (shopX, shopY) = coordPx("QUICK_SHOP", 11, 42)
             dispatchTapGesture(shopX, shopY, 45L)
-            return "Chạm Ô Mua Đồ Nhanh (${shopX.toInt()}, ${shopY.toInt()})"
+            return "Mua Nhanh Trang Bị Khắc Chế (${shopX.toInt()}, ${shopY.toInt()})"
         }
 
         return when (decisionAction) {
+            BotTacticalAction.SAFE_RECALL_BASE -> {
+                val (recallX, recallY) = coordPx("RECALL_BTN", 54, 86)
+                if (tick % 2L == 1L) {
+                    dispatchSwipeGesture(joyX, joyY, joyX - joyRadius * 0.8f, joyY + joyRadius * 0.8f, 260L)
+                    "Kéo Joystick Vào Bụi/Trụ Chuẩn Bị Biến Về"
+                } else {
+                    dispatchTapGesture(recallX, recallY, 70L)
+                    "Bấm Nút Biến Về (${recallX.toInt()}, ${recallY.toInt()}) Hồi Đầy Máu & Mana"
+                }
+            }
+
             BotTacticalAction.RETREAT_HEAL -> {
-                // Nếu có phép Cấp Cứu / Tốc Biến thì bấm ngay, đồng thời kéo Joystick lùi về góc trái dưới (Tế đàn đồng minh)
                 if (scan.healSpellReady && tick % 3L == 0L) {
                     val (healX, healY) = coordPx("SPELL_HEAL", 64, 86)
                     dispatchSimultaneousJoystickAndTap(
                         joyX, joyY,
-                        joyX - joyRadius * 0.8f, joyY + joyRadius * 0.8f,
+                        joyX - joyRadius * 0.82f, joyY + joyRadius * 0.82f,
                         healX, healY,
                         280L
                     )
-                    "Kéo Joystick Lùi Trụ + Bấm Cấp Cứu"
+                    "Bấm Tốc Biến/Cấp Cứu + Kéo Joystick Lùi Trụ"
                 } else {
                     dispatchSwipeGesture(
                         joyX, joyY,
-                        joyX - joyRadius * 0.82f,
-                        joyY + joyRadius * 0.82f,
+                        joyX - joyRadius * 0.85f,
+                        joyY + joyRadius * 0.85f,
                         320L
                     )
-                    "Kéo Joystick Lùi Về Trụ Đồng Minh (Góc 225°)"
+                    "Kéo Joystick Rút Lui Về Trụ Đồng Minh (Góc 225°)"
                 }
             }
 
             BotTacticalAction.DODGE_SKILLSHOT -> {
-                // Kéo Joystick vuông góc 90 độ với hướng của địch
                 val perpAngle = scan.enemyAngleRad + (PI.toFloat() / 2f)
                 val targetJoyX = joyX + cos(perpAngle) * joyRadius
                 val targetJoyY = joyY + sin(perpAngle) * joyRadius
-                dispatchSwipeGesture(joyX, joyY, targetJoyX, targetJoyY, 220L)
-                "Lách Joystick Vuông Góc 90° Né Đạn"
+                dispatchSwipeGesture(joyX, joyY, targetJoyX, targetJoyY, 210L)
+                "Lách Joystick Vuông Góc 90° Né Chiêu Định Hướng"
             }
 
             BotTacticalAction.KITE_POKE -> {
-                // Vừa kéo Joystick lùi nhẹ ngược hướng địch, vừa bấm Đánh thường hoặc Chiêu 1
                 val retreatAngle = scan.enemyAngleRad + PI.toFloat()
                 val targetJoyX = joyX + cos(retreatAngle) * (joyRadius * 0.75f)
                 val targetJoyY = joyY + sin(retreatAngle) * (joyRadius * 0.75f)
@@ -345,60 +384,46 @@ class AovBotAccessibilityService : AccessibilityService() {
                     coordPx("AA_HERO", 88, 82)
                 }
                 dispatchSimultaneousJoystickAndTap(joyX, joyY, targetJoyX, targetJoyY, btnX, btnY, 240L)
-                "Thả Diều (Kéo Lùi + Bắn Tướng)"
+                "Thả Diều Giữ Cự Ly + Bắn Cấu Rỉa"
             }
 
             BotTacticalAction.ATTACK_COMBO -> {
-                // Xoay vòng chuỗi Combo người dùng đã cài (VD: S2 -> S3 -> S1 -> AA)
-                val steps = profile.comboSequence.split("->").map { it.trim() }.filter { it.isNotEmpty() }
-                val stepCode = if (steps.isNotEmpty()) steps[comboStepCounter % steps.size] else "AA"
+                // Múa theo đúng cơ chế riêng của từng vị tướng trong AovHeroAndMetaDatabase
+                val heroSpec = AovHeroAndMetaDatabase.getHeroSpecByIdOrRole(profile.selectedHeroId, profile.heroRole)
+                val step = heroSpec.signatureComboSteps[comboStepCounter % heroSpec.signatureComboSteps.size]
                 comboStepCounter++
 
-                val (btnX, btnY, skillName) = when (stepCode) {
-                    "S1" -> if (scan.skill1Ready) {
-                        val p = coordPx("SKILL_1", 73, 78)
-                        Triple(p.first, p.second, "Chiêu 1")
-                    } else {
-                        val p = coordPx("AA_HERO", 88, 82)
-                        Triple(p.first, p.second, "Đánh Thường")
+                val (btnX, btnY) = coordPx(step.buttonId, 88, 82)
+                val aimRadius = max(58f, screenW * 0.055f)
+
+                when (step.gestureType) {
+                    "SWIPE_REVERSE_ENEMY" -> {
+                        val revAngle = scan.enemyAngleRad + PI.toFloat()
+                        val endX = btnX + cos(revAngle) * aimRadius
+                        val endY = btnY + sin(revAngle) * aimRadius
+                        dispatchSwipeGesture(btnX, btnY, endX, endY, 135L)
                     }
-                    "S2" -> if (scan.skill2Ready) {
-                        val p = coordPx("SKILL_2", 78, 61)
-                        Triple(p.first, p.second, "Chiêu 2")
-                    } else {
-                        val p = coordPx("AA_HERO", 88, 82)
-                        Triple(p.first, p.second, "Đánh Thường")
+                    "SWIPE_TO_ENEMY" -> {
+                        val endX = btnX + cos(scan.enemyAngleRad) * aimRadius
+                        val endY = btnY + sin(scan.enemyAngleRad) * aimRadius
+                        dispatchSwipeGesture(btnX, btnY, endX, endY, 135L)
                     }
-                    "S3" -> if (scan.skill3Ready) {
-                        val p = coordPx("SKILL_3", 87, 50)
-                        Triple(p.first, p.second, "Chiêu Cuối Ulti")
-                    } else {
-                        val p = coordPx("AA_HERO", 88, 82)
-                        Triple(p.first, p.second, "Đánh Thường")
+                    "JOYSTICK_FLOWER_120" -> {
+                        val flowerAngle = scan.enemyAngleRad + (2f * PI.toFloat() / 3f) * (comboStepCounter % 3)
+                        val jx = joyX + cos(flowerAngle) * joyRadius
+                        val jy = joyY + sin(flowerAngle) * joyRadius
+                        dispatchSimultaneousJoystickAndTap(joyX, joyY, jx, jy, btnX, btnY, 175L)
                     }
                     else -> {
-                        val p = coordPx("AA_HERO", 88, 82)
-                        Triple(p.first, p.second, "Đánh Thường")
+                        val jx = joyX + cos(scan.enemyAngleRad) * (joyRadius * 0.65f)
+                        val jy = joyY + sin(scan.enemyAngleRad) * (joyRadius * 0.65f)
+                        dispatchSimultaneousJoystickAndTap(joyX, joyY, jx, jy, btnX, btnY, 190L)
                     }
                 }
-
-                // Nếu phát hiện vị trí địch trên màn hình và là chiêu định hướng, vuốt nút chiêu theo góc địch!
-                if (scan.enemyDetected && (stepCode == "S1" || stepCode == "S2" || stepCode == "S3")) {
-                    val aimRadius = max(55f, screenW * 0.05f)
-                    val aimEndX = btnX + cos(scan.enemyAngleRad) * aimRadius
-                    val aimEndY = btnY + sin(scan.enemyAngleRad) * aimRadius
-                    dispatchSwipeGesture(btnX, btnY, aimEndX, aimEndY, 150L)
-                    "Vuốt Định Hướng $skillName Về Phía Địch"
-                } else {
-                    val targetJoyX = joyX + cos(scan.enemyAngleRad) * (joyRadius * 0.7f)
-                    val targetJoyY = joyY + sin(scan.enemyAngleRad) * (joyRadius * 0.7f)
-                    dispatchSimultaneousJoystickAndTap(joyX, joyY, targetJoyX, targetJoyY, btnX, btnY, 210L)
-                    "Áp Sát + Bấm $skillName"
-                }
+                "Múa ${heroSpec.heroName.substringBefore(" ")}: ${step.stepTitle}"
             }
 
             BotTacticalAction.PUSH_LANE -> {
-                // Tiến lên theo đường chéo phải-trên (45 độ) + bấm nút Đánh Lính hoặc Đẩy Trụ
                 val targetJoyX = joyX + joyRadius * 0.75f
                 val targetJoyY = joyY - joyRadius * 0.75f
                 val (btnX, btnY) = if (tick % 3L == 0L) {
@@ -406,8 +431,8 @@ class AovBotAccessibilityService : AccessibilityService() {
                 } else {
                     coordPx("AA_MINION", 79, 89)
                 }
-                dispatchSimultaneousJoystickAndTap(joyX, joyY, targetJoyX, targetJoyY, btnX, btnY, 260L)
-                "Tiến Lên Đường + Bấm Đánh Lính / Đẩy Trụ"
+                dispatchSimultaneousJoystickAndTap(joyX, joyY, targetJoyX, targetJoyY, btnX, btnY, 250L)
+                "Đi Đường ${profile.assignedLane} Dọn Lính & Đẩy Trụ"
             }
 
             BotTacticalAction.FARM_JUNGLE -> {
@@ -417,7 +442,14 @@ class AovBotAccessibilityService : AccessibilityService() {
                     coordPx("AA_MINION", 79, 89)
                 }
                 dispatchTapGesture(btnX, btnY, 70L)
-                "Farm Quái Rừng (Đánh Quái + Chiêu 1)"
+                "Ăn Quái Rừng / Tranh Chấp Mục Tiêu Lớn"
+            }
+
+            BotTacticalAction.ROAM_ROTATE -> {
+                val targetJoyX = joyX + joyRadius * 0.45f
+                val targetJoyY = joyY - joyRadius * 0.85f
+                dispatchSwipeGesture(joyX, joyY, targetJoyX, targetJoyY, 280L)
+                "Đọc Minimap Đảo Đường Hội Quân Hỗ Trợ Đồng Đội"
             }
         }
     }
@@ -443,9 +475,6 @@ class AovBotAccessibilityService : AccessibilityService() {
         runCatching { dispatchGesture(gesture, null, null) }
     }
 
-    /**
-     * Thực hiện đa điểm (Multi-touch): Ngón trái giữ kéo Joystick, ngón phải bấm nút Chiêu / Đánh thường
-     */
     private fun dispatchSimultaneousJoystickAndTap(
         joyStartX: Float,
         joyStartY: Float,
@@ -477,10 +506,6 @@ class AovBotAccessibilityService : AccessibilityService() {
         return dm.widthPixels.toFloat().coerceAtLeast(360f) to dm.heightPixels.toFloat().coerceAtLeast(360f)
     }
 
-    /**
-     * Thanh điều khiển nổi (Floating Accessibility Overlay) hiện trực tiếp đè lên màn hình Game Liên Quân
-     * Sử dụng TYPE_ACCESSIBILITY_OVERLAY nên không cần xin thêm quyền vẽ đè ngoài Quyền Hỗ Trợ.
-     */
     private fun setupFloatingTacticalOverlay() {
         CoroutineScope(Dispatchers.Main).launch {
             if (overlayRootView != null) return@launch
@@ -550,7 +575,6 @@ class AovBotAccessibilityService : AccessibilityService() {
                     }
                 }
 
-                // Cho phép kéo di chuyển thanh nổi trên màn hình game
                 var initialX = 0
                 var initialY = 0
                 var initialTouchX = 0f
@@ -600,7 +624,7 @@ class AovBotAccessibilityService : AccessibilityService() {
                 setTextColor(if (st.isAutoPlaying) Color.WHITE else Color.parseColor("#0D1322"))
             }
             statusTextView?.text = if (st.isAutoPlaying) {
-                "Máu ${st.detectedBotHpPercent}% • ${st.currentActionTitle.substringBefore(" (")}"
+                "Máu ${st.detectedBotHpPercent}% | MIA:${st.minimapMiaCount} | ${st.currentActionTitle.substringBefore(" (")}"
             } else {
                 "Đã tạm dừng (${st.framesScanned} khung)"
             }
